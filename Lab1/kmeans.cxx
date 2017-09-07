@@ -16,6 +16,7 @@
 #  include <GL/glut.h>
 #endif*/
 
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <queue>
@@ -24,7 +25,7 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
-#include "math.h"
+#include <cmath>
 
 using std::cin;
 using std::cerr;
@@ -41,10 +42,10 @@ using std::priority_queue;
 using std::setprecision;
 using std::ifstream;
 
-int modulo = 1;
-int *n_stars = NULL;
+int n_stars = -1;
+int n_clusters = -1;
 int n_files = -1;
-double ***stars = NULL;
+double *stars = nullptr;
 
 /*int window_size;
 int window_width;
@@ -174,40 +175,44 @@ void mouse_motion(int x, int y) {
 
 
 void usage(char *executable) {
-    cerr << "Usage for star visualizer:" << endl;
+    cerr << "Usage for kmeans:" << endl;
     cerr << "    " << executable << " <argument list>" << endl;
     cerr << "Possible arguments:" << endl;
-    cerr << "   --window_size <width> <height>  : width and height of the window <int> <int>" << endl;
-    cerr << "   --star_files <str>*             : files containing the stars (in LBR coordinates) followed by a cluster identifier (space separated)" << endl;
-    cerr << "   --modulo <int>                  : draw every <modulo> stars, default 1" << endl;
+    cerr << "    num_clusters <int>  : number of clusters to use in the kmeans algorithm" << endl;
+    cerr << "    star_files <str>*   : files containing the stars (in LBR coordinates) followed by a cluster identifier (space separated)" << endl;
     exit(1);
 }
 
 int main(int argc, char** argv) {
 
+    int count;
+    string filename;
     vector<string> star_files;
-
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--star_files") == 0) {
-            i++;
-            while (i < argc && strlen(argv[i]) > 2 && !(argv[i][0] == '-' && argv[i][1] == '-')) {
-                star_files.push_back(string(argv[i]));
-                i++;
-            }
-            i--;
-
-        } else if (strcmp(argv[i], "--window_size") == 0) {
-            window_width = atoi(argv[++i]);
-            window_height = atoi(argv[++i]);
-
-        } else if (strcmp(argv[i], "--modulo") == 0) {
-            modulo = atoi(argv[++i]);
-
-
-        } else {
-            cerr << "Unknown argument '" << argv[i] << "'." << endl;
-            usage(argv[0]);
+    
+    /** Get command-line arguments and count total number of stars ***********/
+    
+    // Get first command-line arg as number of clusters
+    n_clusters = atoi(argv[1]);
+    
+    // Get the rest of command-line args as star files
+    for (int i = 2; i < argc; i++) {
+        filename = string(argv[i]);
+        
+        // First, read the number of stars for each file and add to
+        // total counter
+        ifstream star_stream(filename.c_str());
+        star_stream >> count;
+        n_stars += count;
+        star_stream.close();
+        
+        if (count <= 0) {
+            cerr << "Incorrectly formatted star file: '" << filename << "'" << endl;
+            cerr << "First line should contain the number of stars in the file, and be > 0." << endl;
+            exit(1);
         }
+        
+        // Lastly, add filename to vector
+        star_files.push_back(filename);
     }
 
     n_files = star_files.size();
@@ -218,115 +223,56 @@ int main(int argc, char** argv) {
     }
 
     cout << "Arguments succesfully parsed." << endl;
+    cout << "    number of clusters:     " << setw(10) << n_clusters << endl;
+    cout << "    total number of stars:  " << setw(10) << n_stars << endl;
     cout << "    star files:    " << endl;
     for (int i = 0; i < star_files.size(); i++) {
         cout << "        '" << star_files.at(i) << "'" << endl;
     }
-    cout << "  window_width:    " << setw(10) << window_width << endl;
-    cout << "  window_height:   " << setw(10) << window_width << endl;
+    cout << endl;
+    
+    /** End command-line args & star count ***********************************/
 
-    window_size = window_width * window_height;
+    /** Open each file and store all stars into a single one-dimensional array */
 
-    stars = new double**[n_files];
-    n_stars = new int[n_files];
-
+    // Allocate array, we are going to put all the stars coordinates into a
+    // one-dimenisonal array
+    stars = new double[n_stars * 3];
+    
+    int current_star = 0;
     for (int j = 0; j < n_files; j++) {
         ifstream star_stream(star_files.at(j).c_str());
 
-        star_stream >> n_stars[j];
+        // Get number of stars in current file
+        star_stream >> count;
 
-        if (n_stars[j] <= 0) {
-            cerr << "Incorrectly formatted star file: '" << star_files.at(j).c_str() << "'" << endl;
-            cerr << "First line should contain the number of stars in the file, and be > 0." << endl;
-            exit(1);
-        }
+        cout << "Reading " << count << " stars." << endl;
 
-        stars[j] = new double*[n_stars[j]];
-
-        cout << "Reading " << n_stars[j] << " stars." << endl;
-
-        double avg_l = 0.0, avg_b = 0.0, avg_r = 0.0, avg_x = 0.0, avg_y = 0.0, avg_z = 0.0;
         double l, b, r;
-        for (int i = 0; i < n_stars[j]; i++) {
-            stars[j][i] = new double[4];
-
+        for (int i = 0; i < count; i++) {
             star_stream >> l >> b >> r;
-
-//            cout << "lbr:   " << setw(15) << l << setw(15) << b << setw(15) << r << endl;
-
-            avg_l += l;
-            avg_b += b;
-            avg_r += r;
 
             // convert degrees to radians
             l = l * M_PI / 180;
             b = b * M_PI / 180;
 
-    //        stars[i][0] = stars[i][0] * M_PI / 180;
-    //        stars[i][1] = ((-1.0 * stars[i][1]) + 90) * M_PI / 180;
-
-            //convert lbr (galactic) to x y z (cartesian)
-            stars[j][i][0] = r * cos(b) * sin(l);
-            stars[j][i][1] = 4.2 - r * cos(l) * cos(b);
-            stars[j][i][2] = r * sin(b);
-
-            stars[j][i][3] = j;
-                
-            avg_x += stars[j][i][0];
-            avg_y += stars[j][i][1];
-            avg_z += stars[j][i][2];
-
-//            cout << "xyz:   " << setw(15) << stars[j][i][0] << setw(15) << stars[j][i][1] << setw(15) << stars[j][i][2] << endl;
-//            cout << endl;
-
-    //        if ((i % 1000) == 0) cout << "read " << i << " stars." << endl;
+            // convert l b r (galactic) to x y z (cartesian)
+            stars[current_star * 3]     = r * cos(b) * sin(l);
+            stars[current_star * 3 + 1] = 4.2 - r * cos(l) * cos(b);
+            stars[current_star * 3 + 2] = r * sin(b);
+            
+            current_star++;
         }
-
-        avg_l /= n_stars[j];
-        avg_b /= n_stars[j];
-        avg_r /= n_stars[j];
-        avg_x /= n_stars[j];
-        avg_y /= n_stars[j];
-        avg_z /= n_stars[j];
-
 
         cout << endl;
         cout << "file: '" << star_files.at(j).c_str() << "'" << endl;
-        cout << "   n_stars: " << setw(10) << n_stars[j] << endl;
-        cout << "   avg l:   " << setw(10) << avg_l << endl;
-        cout << "   avg b:   " << setw(10) << avg_b << endl;
-        cout << "   avg r:   " << setw(10) << avg_r << endl;
-        cout << "   avg x:   " << setw(10) << avg_x << endl;
-        cout << "   avg y:   " << setw(10) << avg_y << endl;
-        cout << "   avg z:   " << setw(10) << avg_z << endl;
+        cout << "    n_stars: " << setw(10) << count << endl;
         cout << endl;
+        
+        star_stream.close();
     }
+    
+    /** End storing stars ****************************************************/
 
-    cout << "Initialized star visualizer!" << endl;
-    cout << "window width: "    << window_width << endl;
-    cout << "window height: "   << window_height << endl;
-    cout << "window size : "    << window_size << endl;
-
-    /**
-     *  Generate the first event -- start a fire at a random (non-water) cell
-     */
-
-    glutInit(&argc, argv);
-    glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE | GLUT_DEPTH);
-
-    glutInitWindowSize(window_width, window_height);
-    glutCreateWindow("Star Visualization");
-
-    glutDisplayFunc(display);
-    glutReshapeFunc(reshape);
-    glutMouseFunc(mouse_button);
-    glutMotionFunc(mouse_motion);
-    //glutKeyboardFunc(keyboard);
-    //glutIdleFunc(idle);
-
-    glEnable(GL_DEPTH_TEST);
-    glClearColor(0.0, 0.0, 0.0, 1.0);
-//    glPointSize(2);
-
-    glutMainLoop();
+    return 0;
 }
