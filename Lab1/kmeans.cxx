@@ -1,21 +1,3 @@
-/* W B Langdon at MUN 10 May 2007
- * Program to demonstarte use of OpenGL's glDrawPixels
- */
-
-/*#ifdef _WIN32
-#include <windows.h>
-#endif
-
-#ifdef __APPLE__
-#  include <OpenGL/gl.h>
-#  include <OpenGL/glu.h>
-#  include <GLUT/glut.h>
-#else
-#  include <GL/gl.h>
-#  include <GL/glu.h>
-#  include <GL/glut.h>
-#endif*/
-
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -26,6 +8,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cmath>
+#include <random>
 
 using std::cin;
 using std::cerr;
@@ -45,134 +28,182 @@ using std::ifstream;
 int n_stars = -1;
 int n_clusters = -1;
 int n_files = -1;
+
 double *stars = nullptr;
+double *k_means = nullptr;
 
-/*int window_size;
-int window_width;
-int window_height;
-
-int     ox                  = 0;
-int     oy                  = 0;
-int     buttonState         = 0; 
-float   camera_trans[]      = {0, -0.2, -10};
-float   camera_rot[]        = {0, 0, 0};
-float   camera_trans_lag[]  = {0, -0.2, -10};
-float   camera_rot_lag[]    = {0, 0, 0};
-const float inertia         = 0.1f;*/
+int *cluster_sizes = nullptr;
+int *assignments = nullptr;
 
 
-/*void reshape(int w, int h) {
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(60.0, (float) w / (float) h, 0.1, 1000.0);
+double calculate_distance(double x1, double y1, double z1,
+                          double x2, double y2, double z2)
+{
+    double x_dist = x1 - x2;
+    double y_dist = y1 - y2;
+    double z_dist = z1 - z2;    
+    double sum = x_dist*x_dist + y_dist*y_dist + z_dist*z_dist;
 
-    glMatrixMode(GL_MODELVIEW);
-    glViewport(0, 0, w, h);
+    return sqrt(sum);
 }
 
-void mouse_button(int button, int state, int x, int y) {
-    int mods;
+void initialize() {    
+    // Create Random Number Generator for a distribution from 0 .. n_stars
+    std::mt19937 rng;
+    rng.seed(std::random_device()());
+    std::uniform_int_distribution<std::mt19937::result_type> dist(0, n_stars);
 
-    if (state == GLUT_DOWN)
-        buttonState |= 1<<button;
-    else if (state == GLUT_UP)
-        buttonState = 0;
-
-    mods = glutGetModifiers();
-    if (mods & GLUT_ACTIVE_SHIFT) 
-    {
-        buttonState = 2;
-    } 
-    else if (mods & GLUT_ACTIVE_CTRL) 
-    {
-        buttonState = 3;
+    // Genereate n_clusters number of random numbers to be used as the random
+    // initial stars as a mean for each cluster
+    int idx;
+    double x, y, z;
+    for (int i = 0; i < n_clusters; i++) {
+        idx = dist(rng);
+        
+        k_means[i * 3]     = stars[idx * 3];
+        k_means[i * 3 + 1] = stars[idx * 3 + 1];
+        k_means[i * 3 + 2] = stars[idx * 3 + 2];
     }
-
-    ox = x; oy = y;
-
-    glutPostRedisplay();
 }
 
-void mouse_motion(int x, int y) {
-    float dx = (float)(x - ox);
-    float dy = (float)(y - oy);
-
-    if (buttonState == 3) 
-    {
-        // left+middle = zoom
-        camera_trans[2] += (dy / 100.0f) * 0.5f * fabs(camera_trans[2]);
-    } 
-    else if (buttonState & 2) 
-    {
-        // middle = translate
-        camera_trans[0] += dx / 100.0f;
-        camera_trans[1] -= dy / 100.0f;
-    }
-    else if (buttonState & 1) 
-    {
-        // left = rotate
-        camera_rot[0] += dy / 5.0f;
-        camera_rot[1] += dx / 5.0f;
-    }
-
-    ox = x; oy = y;
-    glutPostRedisplay();
-}
-
-
-/**
- *  The display function gets called repeatedly, updating the visualization of the simulation
- */
-/*void display() {
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-
-    cout << "trans: " << camera_trans[0] << ", " << camera_trans[1] << ", " << camera_trans[2] << " -- rot: " << camera_rot[0] << ", " << camera_rot[1] << ", " << camera_rot[2] << endl;
-    for (int c = 0; c < 3; ++c)
-    {
-        camera_trans_lag[c] += (camera_trans[c] - camera_trans_lag[c]) * inertia;
-        camera_rot_lag[c] += (camera_rot[c] - camera_rot_lag[c]) * inertia;
-    }
-
-    glTranslatef(camera_trans_lag[0], camera_trans_lag[1], camera_trans_lag[2]);
-    glRotatef(camera_rot_lag[0], 1.0, 0.0, 0.0);
-    glRotatef(camera_rot_lag[1], 0.0, 1.0, 0.0);
-
-    glBegin(GL_POINTS);
-    int count = 0;
-    float red = 1.0, green = 1.0, blue = 1.0;
-
-    for (int j = 0; j < n_files; j++) {
-
-        glColor3f(red, green, blue);
-
-        for (int i = 0; i < n_stars[j]; i++) {
-            if ((count % modulo) == 0) glVertex3f(stars[j][i][0], stars[j][i][1], stars[j][i][2]);
-            count++;
-        }
-
-        // Note this only works for up to 27 different input files.
-        red -= 0.30;
-        if (red < 0) {
-            red = 1;
-            green -= 0.30;
-
-            if (green < 0) {
-                green = 1;
-                blue -= 0.3;
+void assignment() {
+    double x, y, z;
+    double mean_x, mean_y, mean_z;
+    double min_distance, current_distance;
+    int min_mean_idx;
+    for (int i = 0; i < n_stars; i++) {
+        // Get current star observation coordinates
+        x = stars[i * 3];
+        y = stars[i * 3 + 1];
+        z = stars[i * 3 + 2];
+        
+        // Initialize the 0th mean as the minimum, then we can skip it in the
+        // for-loop
+        min_mean_idx = 0;
+        min_distance = calculate_distance(x, y, z, k_means[0], k_means[1], k_means[2]);
+    
+        for (int j = 1; j < n_clusters; j++) {
+            // Get current centroid coordinates
+            mean_x = k_means[j * 3];
+            mean_y = k_means[j * 3 + 1];
+            mean_z = k_means[j * 3 + 2];
+            
+            // Calculate the squared distance from the currentstar observation
+            // to the current centroid
+            current_distance = calculate_distance(x, y, z, mean_x, mean_y, mean_z);
+            current_distance *= current_distance;
+            
+            if (current_distance < min_distance) {
+                min_mean_idx = j;
+                min_distance = current_distance;
             }
         }
+        
+        assignments[i] = min_mean_idx;
     }
-    glEnd();
+}
 
-    glFlush();
-    glutSwapBuffers();
+void reset_cluster_sizes() {
+    for (int i = 0; i < n_clusters; i++) {
+        cluster_sizes[i] = 0;
+    }
+}
 
-    glutPostRedisplay();
-}*/
+void calculate_cluster_sizes() {
+    reset_cluster_sizes();
 
+    for (int i = 0; i < n_stars; i++) {
+        cluster_sizes[assignments[i]]++;
+    }
+}
+
+/**
+ * This function performs the Update step of Lloyd's algorithm. This will
+ * return a bool stating whether the simulation should continue since the
+ * algorithm has not converged yet.
+ *
+ * @returns bool true if simulation should continue; otherwise false.
+ */
+bool update() {
+    cout << "\tStarting Calculating Cluster Sizes" << endl;
+    calculate_cluster_sizes();
+    cout << "\tFinished Calculating Cluster Sizes" << endl;
+    
+    // Create a one-dimensional array of the cluster averages. Multiplying by 3
+    // because we need to keep track of xyz for each cluster
+    double *cluster_avgs = new double[n_clusters * 3];
+    for (int i = 0, length = n_clusters * 3; i < length; i++) {
+        cluster_avgs[i] = 0.0;
+    }
+    
+    int cluster;
+    for (int i = 0; i < n_stars; i++) {
+        // Get the cluster the current star is assigned to
+        cluster = assignments[i];
+        
+        cluster_avgs[cluster * 3]     += stars[i * 3];
+        cluster_avgs[cluster * 3 + 1] += stars[i * 3 + 1];
+        cluster_avgs[cluster * 3 + 2] += stars[i * 3 + 2];
+    }
+    
+    // Loop through all the clusters and divide the xyz totals by the cluster
+    // size to get the final xyz averages for each cluster
+    int cluster_size;
+    for (int i = 0; i < n_clusters; i++) {
+        // Get the current cluster's size
+        cluster_size = cluster_sizes[i];
+        
+        cluster_avgs[i * 3]     /= cluster_size;
+        cluster_avgs[i * 3 + 1] /= cluster_size;
+        cluster_avgs[i * 3 + 2] /= cluster_size;
+    }
+    
+    // @TODO Left off here!!!
+    // Compare cluster_avgs with current k_means to see if new centroids are
+    // different from previous ones by some constant (e.g. .001)
+    
+    delete[] cluster_avgs;
+    
+    return false;
+}
+
+void output_centroids(int iter) {
+    cout << "For iteration " << iter << "\n-----------------" << endl;
+    for (int i = 0; i < n_clusters; i++) {
+        cout << "\tCentroid for cluster " << i << ": " << setprecision(8)
+             << setw(12) << k_means[i]     << " "
+             << setw(12) << k_means[i + 1] << " "
+             << setw(12) << k_means[i + 2] << endl;
+    }
+    cout << endl;
+}
+
+void run_simulation() {
+    // Initialize k_means
+    cout << "Starting Forgy initialization" << endl;
+    initialize();
+    cout << "Finished Forgy initialization" << endl << endl;
+    
+    output_centroids(0);
+    
+    int iteration = 1;
+    bool should_continue;
+    do {
+        // Assignment
+        cout << "Starting Assignment" << endl;
+        assignment();
+        cout << "Finished Assignment" << endl << endl;
+        
+        // Update
+        cout << "Starting Update" << endl;
+        should_continue = update();
+        cout << "Finished Update" << endl << endl;
+        
+        output_centroids(iteration);
+        
+        iteration++;
+    } while (should_continue);
+}
 
 void usage(char *executable) {
     cerr << "Usage for kmeans:" << endl;
@@ -184,7 +215,6 @@ void usage(char *executable) {
 }
 
 int main(int argc, char** argv) {
-
     int count;
     string filename;
     vector<string> star_files;
@@ -239,7 +269,12 @@ int main(int argc, char** argv) {
     // one-dimenisonal array
     stars = new double[n_stars * 3];
     
+    k_means = new double[n_clusters * 3];
+    cluster_sizes = new int[n_clusters];
+    assignments = new int[n_stars];
+    
     int current_star = 0;
+    double l, b, r, x, y, z;
     for (int j = 0; j < n_files; j++) {
         ifstream star_stream(star_files.at(j).c_str());
 
@@ -248,18 +283,22 @@ int main(int argc, char** argv) {
 
         cout << "Reading " << count << " stars." << endl;
 
-        double l, b, r;
         for (int i = 0; i < count; i++) {
             star_stream >> l >> b >> r;
 
-            // convert degrees to radians
+            // Convert degrees to radians
             l = l * M_PI / 180;
             b = b * M_PI / 180;
 
-            // convert l b r (galactic) to x y z (cartesian)
-            stars[current_star * 3]     = r * cos(b) * sin(l);
-            stars[current_star * 3 + 1] = 4.2 - r * cos(l) * cos(b);
-            stars[current_star * 3 + 2] = r * sin(b);
+            // Convert l b r (galactic) to x y z (cartesian)
+            x = r * cos(b) * sin(l);
+            y = 4.2 - r * cos(l) * cos(b);
+            z = r * sin(b);
+            
+            // Assign xyz to our one-dimensional stars array
+            stars[current_star * 3]     = x;
+            stars[current_star * 3 + 1] = y;
+            stars[current_star * 3 + 2] = z;
             
             current_star++;
         }
@@ -273,6 +312,13 @@ int main(int argc, char** argv) {
     }
     
     /** End storing stars ****************************************************/
+    
+    run_simulation();
+    
+    delete[] stars;
+    delete[] k_means;
+    delete[] cluster_sizes;
+    delete[] assignments;
 
     return 0;
 }
