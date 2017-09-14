@@ -56,7 +56,6 @@ void initialize() {
     // Genereate n_clusters number of random numbers to be used as the random
     // initial stars as a mean for each cluster
     int idx;
-    double x, y, z;
     for (int i = 0; i < n_clusters; i++) {
         idx = dist(rng);
         
@@ -125,9 +124,9 @@ void calculate_cluster_sizes() {
  * @returns bool true if simulation should continue; otherwise false.
  */
 bool update() {
-    cout << "\tStarting Calculating Cluster Sizes" << endl;
+    // cout << "\tStarting Calculating Cluster Sizes" << endl;
     calculate_cluster_sizes();
-    cout << "\tFinished Calculating Cluster Sizes" << endl;
+    // cout << "\tFinished Calculating Cluster Sizes" << endl;
     
     // Create a one-dimensional array of the cluster averages. Multiplying by 3
     // because we need to keep track of xyz for each cluster
@@ -136,9 +135,11 @@ bool update() {
         cluster_avgs[i] = 0.0;
     }
     
+    // Loop through all the assignments so that we can first calculate the
+    // totals for xyz coordinates in each cluster
     int cluster;
     for (int i = 0; i < n_stars; i++) {
-        // Get the cluster the current star is assigned to
+        // Get the cluster that the current star is assigned to
         cluster = assignments[i];
         
         cluster_avgs[cluster * 3]     += stars[i * 3];
@@ -158,13 +159,43 @@ bool update() {
         cluster_avgs[i * 3 + 2] /= cluster_size;
     }
     
-    // @TODO Left off here!!!
     // Compare cluster_avgs with current k_means to see if new centroids are
     // different from previous ones by some constant (e.g. .001)
+    const double diff_constant = .001;
+    bool should_continue = false;
+    double diff_x, diff_y, diff_z;
+    for (int i = 0; i < n_clusters; i++) {
+        // Get absolute value of the differences of xyz between
+        // old means (kmeans) & new means (cluster_avgs)
+        diff_x = fabs(cluster_avgs[i * 3]     - k_means[i * 3]);
+        diff_y = fabs(cluster_avgs[i * 3 + 1] - k_means[i * 3 + 1]);
+        diff_z = fabs(cluster_avgs[i * 3 + 2] - k_means[i * 3 + 2]);
+        
+        cout << "\tDifferences: " << diff_x << " " << diff_y << " " << diff_z << endl;
+        
+        // Check if any of xyz differ greater than the defined constant.
+        // Only one coordinate for one cluster needs to be different for us
+        // to continue.
+        if (diff_x > diff_constant || diff_y > diff_constant || diff_z > diff_constant) {
+            should_continue = true;
+            // break;
+        }
+    }
+    
+    memcpy(k_means, cluster_avgs, sizeof(double) * n_clusters * 3);
+    
+     
+    /*for (int i = 0; i < n_clusters; i++) {
+        k_means[i * 3]     = cluster_avgs[i * 3];
+        k_means[i * 3 + 1] = cluster_avgs[i * 3 + 1];
+        k_means[i * 3 + 2] = cluster_avgs[i * 3 + 2];
+    }*/
     
     delete[] cluster_avgs;
     
-    return false;
+    cout << "In Update(), should continue?: " << (should_continue ? "True" : "False") << endl;
+    
+    return should_continue;
 }
 
 void output_centroids(int iter) {
@@ -180,9 +211,9 @@ void output_centroids(int iter) {
 
 void run_simulation() {
     // Initialize k_means
-    cout << "Starting Forgy initialization" << endl;
+    // cout << "Starting Forgy initialization" << endl;
     initialize();
-    cout << "Finished Forgy initialization" << endl << endl;
+    // cout << "Finished Forgy initialization" << endl << endl;
     
     output_centroids(0);
     
@@ -190,14 +221,15 @@ void run_simulation() {
     bool should_continue;
     do {
         // Assignment
-        cout << "Starting Assignment" << endl;
+        // cout << "Starting Assignment" << endl;
         assignment();
-        cout << "Finished Assignment" << endl << endl;
+        // cout << "Finished Assignment" << endl << endl;
         
         // Update
-        cout << "Starting Update" << endl;
+        // cout << "Starting Update" << endl;
         should_continue = update();
-        cout << "Finished Update" << endl << endl;
+        cout << "In run_simulation(), should continue?: " << (should_continue ? "True" : "False") << endl;
+        // cout << "Finished Update" << endl << endl;
         
         output_centroids(iteration);
         
@@ -256,7 +288,7 @@ int main(int argc, char** argv) {
     cout << "    number of clusters:     " << setw(10) << n_clusters << endl;
     cout << "    total number of stars:  " << setw(10) << n_stars << endl;
     cout << "    star files:    " << endl;
-    for (int i = 0; i < star_files.size(); i++) {
+    for (size_t i = 0; i < star_files.size(); i++) {
         cout << "        '" << star_files.at(i) << "'" << endl;
     }
     cout << endl;
@@ -304,7 +336,7 @@ int main(int argc, char** argv) {
         }
 
         cout << endl;
-        cout << "file: '" << star_files.at(j).c_str() << "'" << endl;
+        cout << "file: '" << star_files.at(j) << "'" << endl;
         cout << "    n_stars: " << setw(10) << count << endl;
         cout << endl;
         
