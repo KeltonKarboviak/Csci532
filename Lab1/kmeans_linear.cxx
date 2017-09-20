@@ -44,14 +44,14 @@ double calculate_distance(double x1, double y1, double z1,
     double z_dist = z1 - z2;    
     double sum = x_dist*x_dist + y_dist*y_dist + z_dist*z_dist;
 
-    return sqrt(sum);
+    return sum;
 }
 
 void initialize() {    
     // Create Random Number Generator for a distribution from 0 .. n_stars
     std::mt19937 rng;
     rng.seed(std::random_device()());
-    std::uniform_int_distribution<std::mt19937::result_type> dist(0, n_stars);
+    std::uniform_int_distribution<std::mt19937::result_type> dist(0, n_stars - 1);
 
     // Genereate n_clusters number of random numbers to be used as the random
     // initial stars as a mean for each cluster
@@ -90,7 +90,6 @@ void assignment() {
             // Calculate the squared distance from the currentstar observation
             // to the current centroid
             current_distance = calculate_distance(x, y, z, mean_x, mean_y, mean_z);
-            current_distance *= current_distance;
             
             if (current_distance < min_distance) {
                 min_mean_idx = j;
@@ -161,7 +160,7 @@ bool update() {
     
     // Compare cluster_avgs with current k_means to see if new centroids are
     // different from previous ones by some constant (e.g. .001)
-    const double diff_constant = .001;
+    const double diff_constant = 0.0001;
     bool should_continue = false;
     double diff_x, diff_y, diff_z;
     for (int i = 0; i < n_clusters; i++) {
@@ -170,8 +169,6 @@ bool update() {
         diff_x = fabs(cluster_avgs[i * 3]     - k_means[i * 3]);
         diff_y = fabs(cluster_avgs[i * 3 + 1] - k_means[i * 3 + 1]);
         diff_z = fabs(cluster_avgs[i * 3 + 2] - k_means[i * 3 + 2]);
-        
-        cout << "\tDifferences: " << diff_x << " " << diff_y << " " << diff_z << endl;
         
         // Check if any of xyz differ greater than the defined constant.
         // Only one coordinate for one cluster needs to be different for us
@@ -193,8 +190,6 @@ bool update() {
     
     delete[] cluster_avgs;
     
-    cout << "In Update(), should continue?: " << (should_continue ? "True" : "False") << endl;
-    
     return should_continue;
 }
 
@@ -202,9 +197,9 @@ void output_centroids(int iter) {
     cout << "For iteration " << iter << "\n-----------------" << endl;
     for (int i = 0; i < n_clusters; i++) {
         cout << "\tCentroid for cluster " << i << ": " << setprecision(8)
-             << setw(12) << k_means[i]     << " "
-             << setw(12) << k_means[i + 1] << " "
-             << setw(12) << k_means[i + 2] << endl;
+             << setw(12) << k_means[i * 3]     << " "
+             << setw(12) << k_means[i * 3 + 1] << " "
+             << setw(12) << k_means[i * 3 + 2] << endl;
     }
     cout << endl;
 }
@@ -228,7 +223,6 @@ void run_simulation() {
         // Update
         // cout << "Starting Update" << endl;
         should_continue = update();
-        cout << "In run_simulation(), should continue?: " << (should_continue ? "True" : "False") << endl;
         // cout << "Finished Update" << endl << endl;
         
         output_centroids(iteration);
@@ -305,9 +299,8 @@ int main(int argc, char** argv) {
     cluster_sizes = new int[n_clusters];
     assignments = new int[n_stars];
     
-    int current_star = 0;
     double l, b, r, x, y, z;
-    for (int j = 0; j < n_files; j++) {
+    for (int j = 0, current_star = 0; j < n_files; j++) {
         ifstream star_stream(star_files.at(j).c_str());
 
         // Get number of stars in current file
