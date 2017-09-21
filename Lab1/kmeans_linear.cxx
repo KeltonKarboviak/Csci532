@@ -123,9 +123,7 @@ void calculate_cluster_sizes() {
  * @returns bool true if simulation should continue; otherwise false.
  */
 bool update() {
-    // cout << "\tStarting Calculating Cluster Sizes" << endl;
     calculate_cluster_sizes();
-    // cout << "\tFinished Calculating Cluster Sizes" << endl;
     
     // Create a one-dimensional array of the cluster averages. Multiplying by 3
     // because we need to keep track of xyz for each cluster
@@ -175,18 +173,11 @@ bool update() {
         // to continue.
         if (diff_x > diff_constant || diff_y > diff_constant || diff_z > diff_constant) {
             should_continue = true;
-            // break;
+            break;
         }
     }
     
     memcpy(k_means, cluster_avgs, sizeof(double) * n_clusters * 3);
-    
-     
-    /*for (int i = 0; i < n_clusters; i++) {
-        k_means[i * 3]     = cluster_avgs[i * 3];
-        k_means[i * 3 + 1] = cluster_avgs[i * 3 + 1];
-        k_means[i * 3 + 2] = cluster_avgs[i * 3 + 2];
-    }*/
     
     delete[] cluster_avgs;
     
@@ -206,9 +197,7 @@ void output_centroids(int iter) {
 
 void run_simulation() {
     // Initialize k_means
-    // cout << "Starting Forgy initialization" << endl;
     initialize();
-    // cout << "Finished Forgy initialization" << endl << endl;
     
     output_centroids(0);
     
@@ -216,14 +205,10 @@ void run_simulation() {
     bool should_continue;
     do {
         // Assignment
-        // cout << "Starting Assignment" << endl;
         assignment();
-        // cout << "Finished Assignment" << endl << endl;
         
         // Update
-        // cout << "Starting Update" << endl;
         should_continue = update();
-        // cout << "Finished Update" << endl << endl;
         
         output_centroids(iteration);
         
@@ -299,14 +284,12 @@ int main(int argc, char** argv) {
     cluster_sizes = new int[n_clusters];
     assignments = new int[n_stars];
     
-    double l, b, r, x, y, z;
+    double l, b, r;
     for (int j = 0, current_star = 0; j < n_files; j++) {
         ifstream star_stream(star_files.at(j).c_str());
 
         // Get number of stars in current file
         star_stream >> count;
-
-        cout << "Reading " << count << " stars." << endl;
 
         for (int i = 0; i < count; i++) {
             star_stream >> l >> b >> r;
@@ -316,22 +299,12 @@ int main(int argc, char** argv) {
             b = b * M_PI / 180;
 
             // Convert l b r (galactic) to x y z (cartesian)
-            x = r * cos(b) * sin(l);
-            y = 4.2 - r * cos(l) * cos(b);
-            z = r * sin(b);
-            
-            // Assign xyz to our one-dimensional stars array
-            stars[current_star * 3]     = x;
-            stars[current_star * 3 + 1] = y;
-            stars[current_star * 3 + 2] = z;
+            stars[current_star * 3]     = r * cos(b) * sin(l);;
+            stars[current_star * 3 + 1] = 4.2 - r * cos(l) * cos(b);;
+            stars[current_star * 3 + 2] = r * sin(b);
             
             current_star++;
         }
-
-        cout << endl;
-        cout << "file: '" << star_files.at(j) << "'" << endl;
-        cout << "    n_stars: " << setw(10) << count << endl;
-        cout << endl;
         
         star_stream.close();
     }
