@@ -10,6 +10,9 @@
 #include <cmath>
 #include <random>
 
+#include <mpi.h>
+#include <stdio.h>
+
 using std::cin;
 using std::cerr;
 using std::cout;
@@ -24,26 +27,23 @@ using std::vector;
 using std::priority_queue;
 using std::setprecision;
 using std::ifstream;
+using std::ostringstream;
 
 // For Master process only
 int n_clusters;
 int n_files;
-int n_stars;
 
 double *stars = nullptr;
 
 int *assignments = nullptr;
 
 // For all processes
+int n_stars;
 int comm_sz;  // Number of processes
-int my_n_stars;
 int my_rank;  // Process rank
 
 double *k_means = nullptr;
 double *my_stars = nullptr;
-
-int *slice_sizes = nullptr;
-int *slice_offsets = nullptr;
 
 int *cluster_sizes = nullptr;
 int *my_assignments = nullptr;
@@ -87,7 +87,7 @@ void assignment() {
     double mean_x, mean_y, mean_z;
     double min_distance, current_distance;
     int min_mean_idx;
-    for (int i = 0; i < slice_sizes[my_rank]; i++) {
+    for (int i = 0; i < assignments_sizes[my_rank]; i++) {
         // Get current star observation coordinates
         x = my_stars[i * 3];
         y = my_stars[i * 3 + 1];
@@ -139,10 +139,8 @@ void calculate_cluster_sizes() {
  *
  * @returns bool true if simulation should continue; otherwise false.
  */
-bool update() {
-    // cout << "\tStarting Calculating Cluster Sizes" << endl;
+int update() {
     calculate_cluster_sizes();
-    // cout << "\tFinished Calculating Cluster Sizes" << endl;
 
     // Create a one-dimensional array of the cluster averages. Multiplying by 3
     // because we need to keep track of xyz for each cluster
@@ -179,7 +177,7 @@ bool update() {
     // different from previous ones by some constant (e.g. .0001)
     const double diff_constant = 0.0001;
     double diff_x, diff_y, diff_z;
-    bool should_continue = false;
+    bool should_continue = 0;
     for (int i = 0; i < n_clusters; i++) {
         // Get absolute value of the differences of xyz between
         // old means (kmeans) & new means (cluster_avgs)
@@ -191,7 +189,7 @@ bool update() {
         // Only one coordinate for one cluster needs to be different for us
         // to continue.
         if (diff_x > diff_constant || diff_y > diff_constant || diff_z > diff_constant) {
-            should_continue = true;
+            should_continue = 1;
             break;
         }
     }
@@ -218,9 +216,7 @@ void run_simulation() {
     // Only Master process
     if (my_rank == 0) {
         // Initialize k_means
-        // cout << "Starting Forgy initialization" << endl;
         initialize();
-        // cout << "Finished Forgy initialization" << endl << endl;
 
         output_centroids(0);
     }
@@ -238,31 +234,24 @@ void run_simulation() {
         );
 
         // Assignment
-        // cout << "Starting Assignment" << endl;
         assignment();
-        // cout << "Finished Assignment" << endl << endl;
-
-        // @TODO: should I put MPI_Barrier(MPI_COMM_WORLD) here???
 
         MPI_Gatherv(
-            my_assignments,        // the data we're sending
-            slice_sizes[my_rank],  // the size of the data we're sending
-            MPI_DOUBLE,            // the data type we're sending
-            assignments,           // where we're receiving the data
-            slice_sizes,           // the amount of data we're receiving from each process
-            slice_offsets,         // the starting point for where we receive the data from each process
-            MPI_DOUBLE,            // the data type we're receiving
-            0,                     // the process we're sending to
+            my_assignments,              // the data we're sending
+            assignments_sizes[my_rank],  // the size of the data we're sending
+            MPI_INT,                     // the data type we're sending
+            assignments,                 // where we're receiving the data
+            assignments_sizes,           // the amount of data we're receiving from each process
+            assignments_offsets,         // the starting point for where we receive the data from each process
+            MPI_INT,                     // the data type we're receiving
+            0,                           // the process we're sending to
             MPI_COMM_WORLD
         );
 
         // Only Master process
         if (my_rank == 0) {
             // Update
-            // cout << "Starting Update" << endl;
-
-            should_continue = (int)update();
-            // cout << "Finished Update" << endl << endl;
+            should_continue = update();
 
             output_centroids(iteration);
         }
@@ -270,7 +259,7 @@ void run_simulation() {
         // Master process needs to broadcast to all processes whether they
         // should continue or not
         MPI_Bcast(
-            should_continue,
+            &should_continue,
             1,
             MPI_INT,
             0,
@@ -291,7 +280,7 @@ void usage(char *executable) {
 }
 
 int main(int argc, char** argv) {
-    int count;
+    int star_count;
     string filename;
     vector<string> star_files;
 
@@ -321,11 +310,11 @@ int main(int argc, char** argv) {
             // First, read the number of stars for each file and add to
             // total counter
             ifstream star_stream(filename.c_str());
-            star_stream >> count;
-            n_stars += count;
+            star_stream >> star_count;
+            n_stars += star_count;
             star_stream.close();
 
-            if (count <= 0) {
+            if (star_count <= 0) {
                 cerr << "Incorrectly formatted star file: '" << filename << "'" << endl;
                 cerr << "First line should contain the number of stars in the file, and be > 0." << endl;
                 exit(1);
@@ -362,9 +351,6 @@ int main(int argc, char** argv) {
     stars_offsets = new int[comm_sz];
     stars_sizes = new int[comm_sz];
 
-    slice_sizes = new int[comm_sz];
-    slice_offsets = new int[comm_sz];
-
     // Only the Master process
     if (my_rank == 0) {
         // Allocate arrays, we are going to put all the stars coordinates into a
@@ -372,16 +358,14 @@ int main(int argc, char** argv) {
         stars = new double[n_stars * 3];
         assignments = new int[n_stars];
 
-        double l, b, r, x, y, z;
+        double l, b, r;
         for (int j = 0, current_star = 0; j < n_files; j++) {
             ifstream star_stream(star_files.at(j).c_str());
 
             // Get number of stars in current file
-            star_stream >> count;
+            star_stream >> star_count;
 
-            cout << "Reading " << count << " stars." << endl;
-
-            for (int i = 0; i < count; i++) {
+            for (int i = 0; i < star_count; i++) {
                 star_stream >> l >> b >> r;
 
                 // Convert degrees to radians
@@ -396,13 +380,18 @@ int main(int argc, char** argv) {
                 current_star++;
             }
 
-            cout << endl;
-            cout << "file: '" << star_files.at(j) << "'" << endl;
-            cout << "    n_stars: " << setw(10) << count << endl
-
             star_stream.close();
         }
     }
+    
+    // Broadcast number of stars out to all processes
+    MPI_Bcast(
+        &n_stars,  // the data we're broadcasting
+        1,         // the data size
+        MPI_INT,   // the data type
+        0,         // the process we're broadcasting from
+        MPI_COMM_WORLD
+    );
 
     // Calculate the array slice sizes and offsets for each process
     double count = 0.0;
@@ -410,35 +399,41 @@ int main(int argc, char** argv) {
     double stars_to_comm_sz_ratio = (double)n_stars / (double)comm_sz;
 
     for (int i = 0; i < comm_sz; i++) {
-        cout << count << ", ";
-        slice_offsets[i] = (int)count;
+        assignments_offsets[i] = (int)count;
 
         prev_count = count;
 
         count += stars_to_comm_sz_ratio;
-        cout << count << endl;
-        slice_sizes[i] = (int)count - (int)prev_count;
-
-        cout << slice_offsets[i] << ", " << slice_sizes[i] << endl;
+        assignments_sizes[i] = (int)count - (int)prev_count;
+    }
+    
+    for (int i = 0; i < comm_sz; i++) {
+        stars_offsets[i] = assignments_offsets[i] * 3;
+        stars_sizes[i] = assignments_sizes[i] * 3;
     }
 
     // Allocate arrays for each process
-    my_stars = new double[slice_sizes[my_rank] * 3];
-    my_assignments = new int[slice_sizes[my_rank]];
-
-    // my_stars = new double[stars_sizes[my_rank]];
-    // my_assignments = new int[assignments_sizes[my_rank]];
+    my_stars = new double[assignments_sizes[my_rank] * 3];
+    my_assignments = new int[assignments_sizes[my_rank]];
+    
+    for (int i = 0; i < assignments_sizes[my_rank]; i++) {
+        my_stars[i * 3]     = 0.0;
+        my_stars[i * 3 + 1] = 0.0;
+        my_stars[i * 3 + 2] = 0.0;
+        
+        my_assignments[i] = 0;
+    }
 
     // Scatter stars to every process
     MPI_Scatterv(
-        stars,                     // the data we're scattering
-        slice_sizes,               // the size of the data we're scattering to each process
-        slice_offsets,             // where the data is going to be sent from in the array to each process
-        MPI_DOUBLE,                // the data type we're sending
-        my_stars,                  // where we're receiving the data
-        slice_sizes[my_rank] * 3,  // the amount of data we're receiving per process
-        MPI_DOUBLE,                // the data type we're receiving
-        0,                         // the process we're sending from
+        stars,                 // the data we're scattering
+        stars_sizes,           // the size of the data we're scattering to each process
+        stars_offsets,         // where the data is going to be sent from in the array to each process
+        MPI_DOUBLE,            // the data type we're sending
+        my_stars,              // where we're receiving the data
+        stars_sizes[my_rank],  // the amount of data we're receiving per process
+        MPI_DOUBLE,            // the data type we're receiving
+        0,                     // the process we're sending from
         MPI_COMM_WORLD
     );
 
@@ -455,9 +450,6 @@ int main(int argc, char** argv) {
     delete[] assignments_sizes;
     delete[] stars_offsets;
     delete[] stars_sizes;
-
-    delete[] slice_sizes;
-    delete[] slice_offsets;
 
     delete[] my_stars;
     delete[] my_assignments;
