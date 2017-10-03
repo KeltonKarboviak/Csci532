@@ -4,6 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <stdio.h>
 
 #include <mpi.h>
 
@@ -36,6 +37,12 @@ void usage(char *executable) {
     cerr << "\t--seeds <str>*        : files containing the DNA reads" << endl;
     cerr << "\t--chrs <str>*  : files containing the DNA sequence to scan" << endl;
     cerr << "\t--output <str>        : file the output should be written to" << endl;
+}
+
+void getchar() {
+    char dummy;
+    cout << "Enter any key to continue." << endl;
+    cin >> dummy;
 }
 
 int main(int argc, char **argv) {
@@ -124,7 +131,10 @@ int main(int argc, char **argv) {
         int start_pos = 0;
         long current_file_sz = file_sizes[0];
 
+        printf("per-process %ld\n", per_process);
         for (int i = 0, length = comm_sz - 1; i < length; i++) {
+            printf("Calculating for process %d, start_file %d, start_pos %d\n", i + 1, start_file, start_pos);
+
             left = per_process;
             file_start_offsets[i] = start_file;
             file_pos_offsets[i] = start_pos;
@@ -141,6 +151,9 @@ int main(int argc, char **argv) {
                     current_file_sz -= left;
                     left = 0;
                 }
+
+                printf("\tleft %ld, current_file_sz %ld\n", left, current_file_sz);
+                getchar();
             }
         }
 
