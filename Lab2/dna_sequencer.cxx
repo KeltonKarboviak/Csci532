@@ -40,12 +40,38 @@ int comm_sz;  // Number of processes
 int my_rank;  // Process rank
 
 
-void output_map_results() {
+void output_map_results(const vector<string>& chr_names) {
     ofstream output_file(output_filename);
 
     for (auto iter1 = master_map.begin(); iter1 != master_map.end(); iter1++)
         for (auto iter2 = iter1->second.begin(); iter2 != iter1->second.end(); iter2++)
-            output_file << iter1->first << ", " << iter2->first << ", " << iter2->second << endl;
+            output_file << chr_names.at(iter1->first) << ", " << iter2->first << ", " << iter2->second << endl;
+
+    output_file.close();
+}
+
+/**
+ * This function will loop through each file in the chromosome_files vector and
+ * grab the name from each file.
+ *
+ * @return vector<string> A vector of the chromosome names as strings
+ */
+vector<string> get_chromosome_names() {
+    vector<string> names;
+    string line;
+    for (size_t i = 0; i < chromosome_files.size(); i++) {
+        ifstream chr_file(chromosome_files.at(i));
+
+        // We'll just grab the first line since it contains the chromosome's name
+        getline(chr_file, line);
+
+        // This will append everything from the line except the first character
+        names.push_back(line.substr(1));
+
+        chr_file.close();
+    }
+
+    return names;
 }
 
 /**
@@ -55,6 +81,8 @@ void output_map_results() {
  */
 void do_master_stuff() {
     printf("Master process starting\n");
+
+    vector<string> chr_names = get_chromosome_names();
 
     int num_finished = 0;
     int num_workers = comm_sz - 1;
@@ -94,7 +122,7 @@ void do_master_stuff() {
     }
 
     // Output all the results we've received to the output file
-    output_map_results();
+    output_map_results(chr_names);
 
     printf("Master finished\n");
 }
@@ -193,8 +221,6 @@ void do_worker_stuff() {
             ? file_sizes[current_file]
             : file_pos_offsets[my_idx + 1];
 
-        printf("\tWorker %d: current_file %d, end_file %d, current_pos %ld, end_pos %ld\n", my_idx, current_file, end_file, current_pos, end_pos);
-
         /**
          * Find initial position in the file since this process's starting position may be in the middle of a line
          */
@@ -207,13 +233,11 @@ void do_worker_stuff() {
 
         while (true) {
             if (current_char == '@') {
-                printf("\tWorker %d: pos %ld @\n", my_idx, current_pos);
                 getline(seed_file, line);  // Gets everything on the line except beginning @, this is trash to us
                 break;
             }
 
             if (current_char == '\n') {
-                printf("\tWorker %d: pos %ld \\n\n", my_idx, current_pos);
                 // We've hit a new line, so now travel forwards until we find an @
                 do {
                     getline(seed_file, line);  // getline() after a \n will give us the entire next line
@@ -225,15 +249,11 @@ void do_worker_stuff() {
                 break;
             }
 
-            printf("\tWorker %d: pos %ld\n", my_idx, current_pos);
-
             // We're going to travel backwards until we find an @ or \n
             current_pos--;
             seed_file.seekg(current_pos);
             seed_file.get(current_char);
         }
-
-        printf("\t\tWorker %d: actual_pos %ld\n", my_idx, current_pos);
 
         /**
          * Loop through the rest of this process's chunk and insert the reads into its map
@@ -371,19 +391,21 @@ int main(int argc, char **argv) {
         for (size_t i = 0, length = seed_files.size(); i < length; i++) {
             filename = seed_files.at(i);
 
-            ifstream file_handle(filename);
+            ifstream seed_file(filename);
 
-            if (!file_handle.is_open()) {
+            if (!seed_file.is_open()) {
                 cerr << "Error opening file: " << filename << endl;
                 exit(1);
             }
 
             // Seek to end of file, use tellg() to get size of entire file,
             // then store in array
-            file_handle.seekg(0, file_handle.end);
-            file_length = file_handle.tellg();
+            seed_file.seekg(0, seed_file.end);
+            file_length = seed_file.tellg();
             file_sizes[i] = file_length;
             total_file_sizes += file_length;
+
+            seed_file.close();
         }
 
         // Calculate the file offsets and positions for each file
@@ -394,9 +416,7 @@ int main(int argc, char **argv) {
         unsigned long start_pos = 0;
         unsigned long current_file_sz = file_sizes[0];
 
-        printf("per-process %ld\n", per_process);
         for (int i = 0, length = comm_sz - 1; i < length; i++) {
-            printf("Calculating for Worker %d, start_file %d, start_pos %ld\n", i, start_file, start_pos);
 
             left = per_process;
             file_start_offsets[i] = start_file;
@@ -414,20 +434,11 @@ int main(int argc, char **argv) {
                     current_file_sz -= left;
                     left = 0;
                 }
-
-                printf("\tleft %ld, current_file_sz %ld\n", left, current_file_sz);
-                getchar();
             }
         }
 
         file_start_offsets[comm_sz - 1] = seed_files.size() - 1;
         file_pos_offsets[comm_sz - 1] = file_sizes[file_start_offsets[comm_sz - 1]];
-
-        printf("Calculation results:\n");
-        for (int i = 0; i < comm_sz; i++) {
-            printf("\t%d: start_file %ld, start_pos %ld\n", i, file_start_offsets[i], file_pos_offsets[i]);
-        }
-        printf("\n");
     }
 
     // Broadcast file_start_offsets to all processes
