@@ -124,7 +124,7 @@ void do_master_stuff() {
     // Output all the results we've received to the output file
     output_map_results(chr_names);
 
-    printf("Master finished\n");
+    printf("Master process finished\n");
 }
 
 /**
@@ -276,11 +276,7 @@ void do_worker_stuff() {
         seed_file.close();
     }
 
-    for (auto it = reads_map.begin(); it != reads_map.end(); it++) {
-        cout << my_idx << " " << it->first << " " << it->second << endl;
-    }
-
-    printf("Worker %d: Reading Genome\n", my_idx);
+    printf("Worker %d: Reading genome\n", my_idx);
 
     /**
      * Go through all chromosome files
