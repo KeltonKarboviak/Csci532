@@ -14,7 +14,7 @@ gzip -d ERR192339.fastq.gz
 There are more seed files available at the same FTP site (e.g., ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR192/ERR192340/ERR192340.fastq.gz
 )
 
-** Note: ** The seed files are very large (~3 GB) in file size, so it may take sometime to download and unzip them
+**Note:** The seed files are very large (~3 GB) in file size, so it may take sometime to download and unzip them
 
 
 ### Download the chromosome files
