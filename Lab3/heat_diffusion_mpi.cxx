@@ -20,6 +20,10 @@ using std::string;
 #include <vector>
 using std::vector;
 
+#include <utility>
+using std::pair;
+using std::make_pair;
+
 #include <stdio.h>
 #include <mpi.h>
 
@@ -40,6 +44,72 @@ void write_simulation_state(string name, uint32_t height, uint32_t width, uint32
 }
 
 
+void unpack_master_values(double *packed, uint32_t n_processes, uint32_t v_slices, pair<int, int> *hw_pairs, double **unpacked) {
+    pair<int, int> hw_pair;
+    uint32_t h, w; //, block_y, block_x;
+    uint32_t prior_column_height = 0, prior_row_width = 0;
+
+    uint32_t start_x, start_y;
+    uint32_t p = 0;
+    for (uint32_t i = 0; i < n_processes; i++) {
+        hw_pair = hw_pairs[i];
+
+        h = hw_pair.first;
+        w = hw_pair.second;
+
+        start_y = prior_column_height;
+
+//        printf("i %d, offset %d, h %d, w %d\n", i, offset, h, w);
+
+        for (uint32_t y = 0; y < h; y++, start_y++) {
+            start_x = prior_row_width;
+            for (uint32_t x = 0; x < w; x++, start_x++) {
+                unpacked[start_y][start_x] = packed[p++];
+//                printf("\ty %d, x %d, p %d, prior_h %d, prior_w %d = %lf -> %lf\n",
+//                    y, x, p, prior_column_height, prior_row_width, packed[p++], unpacked[y + prior_column_height][x + prior_row_width]);
+            }
+        }
+
+        // Add current block's width to the prior width
+        prior_row_width += w;
+
+        if ((i + 1) % v_slices == 0) {
+            // We need to reset the prior block width at the start of every
+            // new row, and we also need to add the previous row's height to
+            // the prior column height at the start of a new row
+            prior_row_width = 0;
+            prior_column_height += h;
+        }
+    }
+}
+
+
+void pack(double **unpacked, uint32_t start_y, uint32_t start_x, uint32_t height, uint32_t width, double *packed) {
+    uint32_t i = 0;
+    uint32_t y_iters = start_y + height;  // Number of rows to iterate over, excludes halo(s) on top and/or bottom
+    uint32_t x_iters = start_x + width;   // Number of columns to iterate over, excludes halo(s) on left and/or right
+    for (uint32_t y = start_y; y < y_iters; y++) {
+        for (uint32_t x = start_x; x < x_iters; x++) {
+            packed[i++] = unpacked[y][x];
+        }
+    }
+}
+
+
+void col_to_row(double **src, double *dest, int start_y, int col_num, int length) {
+    for (y = start_y, i = 0; y < length; y++, i++) {
+        dest[i] = src[y][col_num];
+    }
+}
+
+
+void row_to_col(double *src, double **dest, int start_y, int col_num, int length) {
+    for (int i = 0, y = start_y; i < length; i++, y++) {
+        dest[y][col_num] = src[i];
+    }
+}
+
+
 void usage(char *executable) {
     cerr << "ERROR, incorrect arguments." << endl
          << "usage:" << endl
@@ -55,6 +125,14 @@ int main(int argc, char **argv) {
 
     uint32_t my_block_x, my_block_y;
     uint32_t my_block_height, my_block_width;
+    uint32_t my_halo_height, my_halo_width;
+    uint32_t pack_start_y, pack_start_x;
+
+    // Process numbers for MPI halo transfers
+    int32_t my_p_up = -1, my_p_right = -1, my_p_down = -1, my_p_left = -1;
+
+    // Individual process's block height & width as a std::pair
+    pair<int, int> my_block_hw;
 
     int comm_sz, my_rank;
 
@@ -114,74 +192,232 @@ int main(int argc, char **argv) {
         block_widths[i]++;
     }
 
-//    my_block_height = height / v_slices;
-//    my_block_width = width / h_slices;
-
-    printf("[%d]: y = %d, x = %d, height = %d, width = %d\n", my_rank, my_block_y, my_block_x, block_heights[my_block_y], block_widths[my_block_x]);
-
-    double **my_values = new double*[height];
-    double **my_values_next = new double*[height];
-
-    double *my_packed_values = new double[width*height];
-
-    // Initialize all values to 0
-    for (uint32_t i = 0; i < height; i++) {
-        my_values[i] = new double[width];
-        my_values_next[i] = new double[width];
-        for (uint32_t j = 0; j < width; j++) {
-            my_values[i][j] = 0.0;
-            my_values_next[i][j] = 0.0;
+    // Create and initialize an array of height & width pairs for each process
+    pair<int, int> *block_hw_pairs = new pair<int, int>[comm_sz];
+    int i = 0;
+    for (uint32_t y = 0; y < v_slices; y++) {
+        for (uint32_t x = 0; x < h_slices; x++) {
+            block_hw_pairs[i++] = make_pair(block_heights[y], block_widths[x]);
         }
     }
 
-    // Put a heat source on the left column of the simulation
-    for (uint32_t i = 0; i < height; i++) {
-        my_values[i][0] = 1.0;
-        my_values_next[i][0] = 1.0;
+    my_block_height = block_heights[my_block_y];
+    my_block_width = block_widths[my_block_x];
+    my_block_hw = block_hw_pairs[my_rank];
+
+    // Calculate an extended height/width for each process that includes
+    // their halo
+    my_halo_height = my_block_height;
+    my_halo_width = my_block_width;
+    pack_start_y = 0;
+    pack_start_x = 0;
+
+    if (my_block_y != 0) {             // Needs top halo?
+        my_halo_height++;
+        pack_start_y++;  // Push starting y value down 1
+        my_p_up = my_rank - v_slices;
     }
 
-    // Put a cold source on the right column of the simulation
-    for (uint32_t i = 0; i < height; i++) {
-        my_values[i][width - 1] = -1.0;
-        my_values_next[i][width - 1] = -1.0;
+    if (my_block_y != h_slices - 1) {  // Needs bottom halo?
+        my_halo_height++;
+        my_p_down = my_rank + v_slices;
     }
 
-    if (my_rank == 0)
-        write_simulation_state(simulation_name, height, width, 0, my_values);
+    if (my_block_x != 0) {             // Needs left halo?
+        my_halo_width++;
+        pack_start_x++;  // Push starting x value right 1
+        my_p_left = my_rank - 1;
+    }
 
-    // Update the heat values at each step of the simulation for all
-    // internal values
-//    for (uint32_t time_step = 1; time_step <= time_steps; time_step++) {
-//        // The border values are sources/sinks of heat
-//        for (uint32_t i = 1; i < height - 1; i++) {
-//            for (uint32_t j = 1; j < width - 1; j++) {
-//                double up = values[i - 1][j];
-//                double down = values[i + 1][j];
-//                double left = values[i][j - 1];
-//                double right = values[i][j + 1];
+    if (my_block_x != v_slices - 1) {  // Needs right halo?
+        my_halo_width++;
+        my_p_right = my_rank + 1;
+    }
+
+    printf("[%d]: y = %d, x = %d, height = %d, width = %d, pair = (%d, %d), halo = (%d, %d), start = (%d, %d)\n",
+        my_rank, my_block_y, my_block_x, my_block_height, my_block_width, my_block_hw.first, my_block_hw.second, my_halo_height, my_halo_width, pack_start_y, pack_start_x);
+
+    /**
+     * Initialize the larger 2D array in master process only since it will be
+     * handling the printing
+     */
+    double **master_values;
+    double *packed_master_values = new double[height * width];
+
+    if (my_rank == 0) {
+        master_values = new double*[height];
+
+        // Initialize all values to 0
+        for (uint32_t y = 0; y < height; y++) {
+            master_values[y] = new double[width];
+            for (uint32_t x = 0; x < width; x++) {
+                master_values[y][x] = 0.0;
+            }
+        }
+    }
+
+    /**
+     * Initialize individual process's 2D block array
+     */
+
+    // Each process's my_values will be created using the halo height & width
+    // since we could potentially need to store a column/row from a surrounding
+    // process.
+    double **my_values = new double*[my_halo_height];
+    double **my_values_next = new double*[my_halo_height];
+
+    // However, my_packed_values is created using just the my_block height/width
+    // since we will only be packing the process's values excluding the halo
+    // column(s)/row(s).
+    double *my_packed_values = new double[my_block_height * my_block_width];
+
+    // Initialize all values to 0
+    for (uint32_t y = 0; y < my_halo_height; y++) {
+        my_values[y] = new double[my_halo_width];
+        my_values_next[y] = new double[my_halo_width];
+        for (uint32_t x = 0; x < my_halo_width; x++) {
+            my_values[y][x] = 0.0;
+            my_values_next[y][x] = 0.0;
+        }
+    }
+
+    // Check if block is on lhs of master 2D array
+    if (my_block_x == 0) {
+        printf("[%d]: heat source\n", my_rank);
+        // Put a heat source on the left column of the simulation
+        for (uint32_t y = 0; y < my_halo_height; y++) {
+            my_values[y][0] = 1.0;
+            my_values_next[y][0] = 1.0;
+        }
+    }
+
+    // Check if block is on rhs of master 2D array
+    if (my_block_x == v_slices - 1) {
+        printf("[%d]: cold source\n", my_rank);
+        // Put a cold source on the right column of the simulation
+        for (uint32_t y = 0; y < my_halo_height; y++) {
+            my_values[y][my_halo_width - 1] = -1.0;
+            my_values_next[y][my_halo_width - 1] = -1.0;
+        }
+    }
+
+//    write_simulation_state(simulation_name + std::to_string(my_rank), my_block_height, my_block_width, 0, my_values);
+
+    /**
+     * Calculate the slice_sizes and offsets when the master process uses
+     * Gatherv to get every process's my_values and unpack them into the
+     * master_values array
+     */
+    int count = 0;
+    int *slice_sizes = new int[comm_sz];
+    int *offsets = new int[comm_sz];
+
+    for (int i = 0; i < comm_sz; i++) {
+        slice_sizes[i] = block_hw_pairs[i].first * block_hw_pairs[i].second;
+
+        offsets[i] = count;
+
+        count += slice_sizes[i];
+//        if (my_rank == 0) printf("%d, %d\n", slice_sizes[i], offsets[i]);
+    }
+
+    /**
+     * Run simulation loop for specified number of time steps
+     */
+    uint32_t time_step = 0;
+    do {
+        // First each individual process packs their 2D array block into a 1D array
+        // for sending through MPI
+        pack(my_values, pack_start_y, pack_start_x, my_block_height, my_block_width, my_packed_values);
+
+        // Send each block to the master process
+        MPI_Gatherv(
+            my_packed_values,      // the data we're sending
+            slice_sizes[my_rank],  // the size of the data we're sending
+            MPI_DOUBLE,            // the data type we're sending
+            packed_master_values,  // where we're receiving the data
+            slice_sizes,           // the amount of data we're receiving from each process
+            offsets,               // the starting point of where we receive the data from each process
+            MPI_DOUBLE,            // the data type we're receiving
+            0,                     // the process we're gathering to
+            MPI_COMM_WORLD
+        );
+
+        if (my_rank == 0) {
+            // Unpack the values received from every other process into
+            // master_values
+            unpack_master_values(packed_master_values, comm_sz, v_slices, block_hw_pairs, master_values);
+
+            for (uint32_t y = 0; y < height; y++) {
+                for (uint32_t x = 0; x < width; x++) {
+                    printf("%10.5f", master_values[y][x]);
+                }
+                printf("\n");
+            }
+            printf("\n\n");
+
+            write_simulation_state(simulation_name, height, width, time_step, master_values);
+        }
+
+        // Transfer halos
+        if (my_p_up != -1) {  // Top halo
+
+        }
+
+        if (my_p_down != -1) {  // Bottom halo
+
+        }
+
+        if (my_p_left != -1) {  // Left halo
+
+        }
+
+        if (my_p_right != -1) {  // Right halo
+
+        }
+
+        // The border values are either sources/sinks of heat or halo values,
+        // so we exclude them from the update
+//        for (uint32_t y = 1; y < my_halo_height - 1; y++) {
+//            for (uint32_t x = 1; x < my_halo_width - 1; x++) {
+//                double up = my_values[y - 1][x];
+//                double down = my_values[y + 1][x];
+//                double left = my_values[y][x - 1];
+//                double right = my_values[y][x + 1];
 //
 //                // Set the values of the next time step of the heat simulation
-//                values_next[i][j] = (up + down + left + right) / 4.0;
+//                my_values_next[y][x] = (up + down + left + right) / 4.0;
 //            }
 //        }
-//
-//        // Swap the values arrays
-//        double **temp = values_next;
-//        values_next = values;
-//        values = temp;
-//
-//        // Store the simulation state so you can compare this to your MPI version
-//        write_simulation_state(simulation_name, height, width, time_step, values);
-//    }
 
-    for (uint32_t i = 0; i < height; i++) {
-        delete[] my_values[i];
-        delete[] my_values_next[i];
+        // Swap the values arrays
+        double **temp = my_values_next;
+        my_values_next = my_values;
+        my_values = temp;
+//        }
+    } while (++time_step <= time_steps);
+
+    // Only the master process
+    if (my_rank == 0) {
+        for (uint32_t y = 0; y < height; y++) {
+            delete[] master_values[y];
+        }
+        delete[] master_values;
+        delete[] packed_master_values;
     }
 
+    for (uint32_t y = 0; y < my_block_height; y++) {
+        delete[] my_values[y];
+        delete[] my_values_next[y];
+    }
+
+    delete[] block_hw_pairs;
     delete[] my_values;
     delete[] my_values_next;
     delete[] my_packed_values;
+
+    delete[] slice_sizes;
+    delete[] offsets;
 
     MPI_Finalize();
 
