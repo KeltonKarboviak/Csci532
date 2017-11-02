@@ -46,7 +46,7 @@ void write_simulation_state(string name, uint32_t height, uint32_t width, uint32
 
 void unpack_master_values(double *packed, uint32_t n_processes, uint32_t v_slices, pair<int, int> *hw_pairs, double **unpacked) {
     pair<int, int> hw_pair;
-    uint32_t h, w; //, block_y, block_x;
+    uint32_t h, w;
     uint32_t prior_column_height = 0, prior_row_width = 0;
 
     uint32_t start_x, start_y;
@@ -59,14 +59,10 @@ void unpack_master_values(double *packed, uint32_t n_processes, uint32_t v_slice
 
         start_y = prior_column_height;
 
-//        printf("i %d, offset %d, h %d, w %d\n", i, offset, h, w);
-
         for (uint32_t y = 0; y < h; y++, start_y++) {
             start_x = prior_row_width;
             for (uint32_t x = 0; x < w; x++, start_x++) {
                 unpacked[start_y][start_x] = packed[p++];
-//                printf("\ty %d, x %d, p %d, prior_h %d, prior_w %d = %lf -> %lf\n",
-//                    y, x, p, prior_column_height, prior_row_width, packed[p++], unpacked[y + prior_column_height][x + prior_row_width]);
             }
         }
 
