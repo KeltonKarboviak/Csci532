@@ -197,8 +197,8 @@ int main(int argc, char **argv) {
     // Create and initialize an array of height & width pairs for each process
     pair<int, int> *block_hw_pairs = new pair<int, int>[comm_sz];
     int i = 0;
-    for (uint32_t y = 0; y < v_slices; y++) {
-        for (uint32_t x = 0; x < h_slices; x++) {
+    for (uint32_t y = 0; y < h_slices; y++) {
+        for (uint32_t x = 0; x < v_slices; x++) {
             block_hw_pairs[i++] = make_pair(block_heights[y], block_widths[x]);
         }
     }
@@ -244,9 +244,6 @@ int main(int argc, char **argv) {
         my_recv_right = new double[my_halo_height];
     }
 
-    printf("[%d]: y = %d, x = %d, height = %d, width = %d, pair = (%d, %d), halo = (%d, %d), start = (%d, %d)\n",
-        my_rank, my_block_y, my_block_x, my_block_height, my_block_width, my_block_hw.first, my_block_hw.second, my_halo_height, my_halo_width, pack_start_y, pack_start_x);
-
     /**
      * Initialize the larger 2D array in master process only since it will be
      * handling the printing
@@ -286,14 +283,13 @@ int main(int argc, char **argv) {
         my_values[y] = new double[my_halo_width];
         my_values_next[y] = new double[my_halo_width];
         for (uint32_t x = 0; x < my_halo_width; x++) {
-            my_values[y][x] = (double)my_rank;
-            my_values_next[y][x] = (double)my_rank;
+            my_values[y][x] = 0.0;
+            my_values_next[y][x] = 0.0;
         }
     }
 
     // Check if block is on lhs of master 2D array
     if (my_block_x == 0) {
-        printf("[%d]: heat source\n", my_rank);
         // Put a heat source on the left column of the simulation
         for (uint32_t y = 0; y < my_halo_height; y++) {
             my_values[y][0] = 1.0;
@@ -303,15 +299,12 @@ int main(int argc, char **argv) {
 
     // Check if block is on rhs of master 2D array
     if (my_block_x == v_slices - 1) {
-        printf("[%d]: cold source\n", my_rank);
         // Put a cold source on the right column of the simulation
         for (uint32_t y = 0; y < my_halo_height; y++) {
             my_values[y][my_halo_width - 1] = -1.0;
             my_values_next[y][my_halo_width - 1] = -1.0;
         }
     }
-
-//    write_simulation_state(simulation_name + std::to_string(my_rank), my_block_height, my_block_width, 0, my_values);
 
     /**
      * Calculate the slice_sizes and offsets when the master process uses
@@ -328,7 +321,6 @@ int main(int argc, char **argv) {
         offsets[i] = count;
 
         count += slice_sizes[i];
-//        if (my_rank == 0) printf("%d, %d\n", slice_sizes[i], offsets[i]);
     }
 
     /**
@@ -358,37 +350,14 @@ int main(int argc, char **argv) {
             // master_values
             unpack_master_values(packed_master_values, comm_sz, v_slices, block_hw_pairs, master_values);
 
-            for (uint32_t y = 0; y < height; y++) {
-                for (uint32_t x = 0; x < width; x++) {
-                    printf("%10.5f", master_values[y][x]);
-                }
-                printf("\n");
-            }
-            printf("\n\n");
-
             write_simulation_state(simulation_name, height, width, time_step, master_values);
         }
 
         // Transfer halos
         if (my_p_up >= 0) {  // Top halo
-            MPI_Send(
-                my_values[1],  // Data we're sending
-                my_halo_width, // Size of data we're sending
-                MPI_DOUBLE,    // Type of data we're sending
-                my_p_up,       // Process we're sending data to
-                0,             // Tag of message
-                MPI_COMM_WORLD
-            );
+            MPI_Send(my_values[1], my_halo_width, MPI_DOUBLE, my_p_up, 0, MPI_COMM_WORLD);
 
-            MPI_Recv(
-                my_values[0],  // Where we're receiving data
-                my_halo_width, // Size of data we're receiving
-                MPI_DOUBLE,    // Type of data we're receiving
-                my_p_up,       // Process we're receiving data from
-                0,             // Tag of message to receive
-                MPI_COMM_WORLD,
-                MPI_STATUS_IGNORE
-            );
+            MPI_Recv(my_values[0], my_halo_width, MPI_DOUBLE, my_p_up, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         }
 
         if (my_p_down >= 0) {  // Bottom halo
@@ -426,17 +395,6 @@ int main(int argc, char **argv) {
                 my_values_next[y][x] = (up + down + left + right) / 4.0;
             }
         }
-
-//        if (my_rank == 3) {
-//            printf("[%d]----------\n", my_rank);
-//            for (uint32_t y = 0; y < my_halo_height; y++) {
-//                for (uint32_t x = 0; x < my_halo_width; x++) {
-//                    printf("%10.5f", my_values[y][x]);
-//                }
-//                printf("\n");
-//            }
-//            printf("\n\n");
-//        }
 
         // Swap the values arrays
         double **temp = my_values_next;
