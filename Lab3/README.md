@@ -13,7 +13,10 @@ g++ ../heat_diffusion.cxx -o heat_diffusion --std=c++11
 ```
 
 > Note: the command-line arguments should be in the following format:
-> ./heat_diffusion <simulation name : string> <height : int> <width : int> <vertical slices : int> <horizontal slices : int> <time steps : int>
+
+```bash
+./heat_diffusion <simulation name : string> <height : int> <width : int> <vertical slices : int> <horizontal slices : int> <time steps : int>
+```
 
 ### Parallel Version
 
