@@ -96,16 +96,16 @@ void pack(double **unpacked, uint32_t start_y, uint32_t start_x, uint32_t height
 }
 
 
-void col_to_row(double **src, double *dest, int start_y, int col_num, int length) {
-    for (y = start_y, i = 0; y < length; y++, i++) {
-        dest[i] = src[y][col_num];
+void col_to_row(double **src, double *dest, int col_num, int length) {
+    for (int y = 0; y < length; y++) {
+        dest[y] = src[y][col_num];
     }
 }
 
 
-void row_to_col(double *src, double **dest, int start_y, int col_num, int length) {
-    for (int i = 0, y = start_y; i < length; i++, y++) {
-        dest[y][col_num] = src[i];
+void row_to_col(double *src, double **dest, int col_num, int length) {
+    for (int i = 0; i < length; i++) {
+        dest[i][col_num] = src[i];
     }
 }
 
@@ -127,6 +127,8 @@ int main(int argc, char **argv) {
     uint32_t my_block_height, my_block_width;
     uint32_t my_halo_height, my_halo_width;
     uint32_t pack_start_y, pack_start_x;
+
+    double *my_send_left, *my_recv_left, *my_send_right, *my_recv_right;
 
     // Process numbers for MPI halo transfers
     int32_t my_p_up = -1, my_p_right = -1, my_p_down = -1, my_p_left = -1;
@@ -227,11 +229,19 @@ int main(int argc, char **argv) {
         my_halo_width++;
         pack_start_x++;  // Push starting x value right 1
         my_p_left = my_rank - 1;
+
+        // Allocate arrays for left/right halo transfers
+        my_send_left = new double[my_halo_height];
+        my_recv_left = new double[my_halo_height];
     }
 
     if (my_block_x != v_slices - 1) {  // Needs right halo?
         my_halo_width++;
         my_p_right = my_rank + 1;
+
+        // Allocate arrays for left/right halo transfers
+        my_send_right = new double[my_halo_height];
+        my_recv_right = new double[my_halo_height];
     }
 
     printf("[%d]: y = %d, x = %d, height = %d, width = %d, pair = (%d, %d), halo = (%d, %d), start = (%d, %d)\n",
@@ -276,8 +286,8 @@ int main(int argc, char **argv) {
         my_values[y] = new double[my_halo_width];
         my_values_next[y] = new double[my_halo_width];
         for (uint32_t x = 0; x < my_halo_width; x++) {
-            my_values[y][x] = 0.0;
-            my_values_next[y][x] = 0.0;
+            my_values[y][x] = (double)my_rank;
+            my_values_next[y][x] = (double)my_rank;
         }
     }
 
@@ -360,42 +370,84 @@ int main(int argc, char **argv) {
         }
 
         // Transfer halos
-        if (my_p_up != -1) {  // Top halo
+        if (my_p_up >= 0) {  // Top halo
+            MPI_Send(
+                my_values[1],  // Data we're sending
+                my_halo_width, // Size of data we're sending
+                MPI_DOUBLE,    // Type of data we're sending
+                my_p_up,       // Process we're sending data to
+                0,             // Tag of message
+                MPI_COMM_WORLD
+            );
 
+            MPI_Recv(
+                my_values[0],  // Where we're receiving data
+                my_halo_width, // Size of data we're receiving
+                MPI_DOUBLE,    // Type of data we're receiving
+                my_p_up,       // Process we're receiving data from
+                0,             // Tag of message to receive
+                MPI_COMM_WORLD,
+                MPI_STATUS_IGNORE
+            );
         }
 
-        if (my_p_down != -1) {  // Bottom halo
+        if (my_p_down >= 0) {  // Bottom halo
+            MPI_Send(my_values[my_halo_height - 2], my_halo_width, MPI_DOUBLE, my_p_down, 0, MPI_COMM_WORLD);
 
+            MPI_Recv(my_values[my_halo_height - 1], my_halo_width, MPI_DOUBLE, my_p_down, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         }
 
-        if (my_p_left != -1) {  // Left halo
+        if (my_p_left >= 0) {  // Left halo
+            col_to_row(my_values, my_send_left, 1, my_halo_height);
+            MPI_Send(my_send_left, my_halo_height, MPI_DOUBLE, my_p_left, 0, MPI_COMM_WORLD);
 
+            MPI_Recv(my_recv_left, my_halo_height, MPI_DOUBLE, my_p_left, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            row_to_col(my_recv_left, my_values, 0, my_halo_height);
         }
 
-        if (my_p_right != -1) {  // Right halo
+        if (my_p_right >= 0) {  // Right halo
+            col_to_row(my_values, my_send_right, my_halo_width-2, my_halo_height);
+            MPI_Send(my_send_right, my_halo_height, MPI_DOUBLE, my_p_right, 0, MPI_COMM_WORLD);
 
+            MPI_Recv(my_recv_right, my_halo_height, MPI_DOUBLE, my_p_right, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            row_to_col(my_recv_right, my_values, my_halo_width-1, my_halo_height);
         }
 
         // The border values are either sources/sinks of heat or halo values,
         // so we exclude them from the update
-//        for (uint32_t y = 1; y < my_halo_height - 1; y++) {
-//            for (uint32_t x = 1; x < my_halo_width - 1; x++) {
-//                double up = my_values[y - 1][x];
-//                double down = my_values[y + 1][x];
-//                double left = my_values[y][x - 1];
-//                double right = my_values[y][x + 1];
-//
-//                // Set the values of the next time step of the heat simulation
-//                my_values_next[y][x] = (up + down + left + right) / 4.0;
+        for (uint32_t y = 1; y < my_halo_height - 1; y++) {
+            for (uint32_t x = 1; x < my_halo_width - 1; x++) {
+                double up = my_values[y - 1][x];
+                double down = my_values[y + 1][x];
+                double left = my_values[y][x - 1];
+                double right = my_values[y][x + 1];
+
+                // Set the values of the next time step of the heat simulation
+                my_values_next[y][x] = (up + down + left + right) / 4.0;
+            }
+        }
+
+//        if (my_rank == 3) {
+//            printf("[%d]----------\n", my_rank);
+//            for (uint32_t y = 0; y < my_halo_height; y++) {
+//                for (uint32_t x = 0; x < my_halo_width; x++) {
+//                    printf("%10.5f", my_values[y][x]);
+//                }
+//                printf("\n");
 //            }
+//            printf("\n\n");
 //        }
 
         // Swap the values arrays
         double **temp = my_values_next;
         my_values_next = my_values;
         my_values = temp;
-//        }
     } while (++time_step <= time_steps);
+
+
+    /**
+     * Cleanup
+     */
 
     // Only the master process
     if (my_rank == 0) {
@@ -409,6 +461,16 @@ int main(int argc, char **argv) {
     for (uint32_t y = 0; y < my_block_height; y++) {
         delete[] my_values[y];
         delete[] my_values_next[y];
+    }
+
+    if (my_p_left >= 0) {
+        delete[] my_send_left;
+        delete[] my_recv_left;
+    }
+
+    if (my_p_right >= 0) {
+        delete[] my_send_right;
+        delete[] my_recv_right;
     }
 
     delete[] block_hw_pairs;
