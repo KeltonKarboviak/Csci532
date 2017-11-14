@@ -57,7 +57,7 @@ int main(int n_arguments, char **arguments) {
 
             for (int cy = 0; cy < filter_height; cy++) {
                 for (int cx = 0; cx < filter_width; cx++) {
-                    output[y][x] += input[y + cy][y + cx] * filter[cy][cx];
+                    output[y][x] += input[y + cy][x + cx] * filter[cy][cx];
                 }
             }
 
