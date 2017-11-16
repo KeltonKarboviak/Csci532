@@ -12,9 +12,29 @@ void print_matrix(const char *name, float **matrix, int height, int width) {
     printf("\n");
 }
 
-int main(int n_arguments, char **arguments) {
-    int input_height = 16;
-    int input_width = 16;
+void usage(char *executable) {
+    printf("ERROR, incorrect arguments.\n");
+    printf("usage:\n");
+    printf("\t %s <input height: int> <input width: int> <filter height: int> <filter width: int>\n", executable);
+    exit(1);
+}
+
+int main(int argc, char **argv) {
+    if (argc != 5) {
+        usage(argv[0]);
+    }
+
+    // Hard-code for testing output
+    srand48(20171116);
+
+    int input_height = atoi(argv[1]);
+    int input_width = atoi(argv[2]);
+
+    int filter_height = atoi(argv[3]);
+    int filter_width = atoi(argv[4]);
+
+    int output_height = input_height - filter_height + 1;
+    int output_width = input_width - filter_width + 1;
 
     float **input = (float**)malloc(sizeof(float*) * input_height);
     for (int y = 0; y < input_height; y++) {
@@ -25,9 +45,6 @@ int main(int n_arguments, char **arguments) {
         }
     }
 
-    int filter_height = 5;
-    int filter_width = 5;
-
     float **filter = (float**)malloc(sizeof(float*) * filter_height);
     for (int y = 0; y < filter_height; y++) {
         filter[y] = (float*)malloc(sizeof(float) * filter_width);
@@ -36,9 +53,6 @@ int main(int n_arguments, char **arguments) {
             filter[y][x] = drand48() * 100;
         }
     }
-
-    int output_height = input_height - filter_height + 1;
-    int output_width = input_width - filter_width + 1;
 
     float **output = (float**)malloc(sizeof(float*) * output_height);
     for (int y = 0; y < output_height; y++) {
