@@ -7,7 +7,7 @@ extern "C++" {
 #include <cuda_runtime.h>
 
 
-__device__ unsigned int
+__device__ __constant__ unsigned int
     d_input_height, d_input_width,
     d_filter_height, d_filter_width,
     d_output_height, d_output_width;
