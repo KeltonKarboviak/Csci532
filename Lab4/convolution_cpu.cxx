@@ -1,11 +1,12 @@
 #include "stdlib.h"
 #include "stdio.h"
+#include "string.h"
 
 void print_matrix(const char *name, float **matrix, int height, int width) {
     printf("%s\n", name);
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
-            printf(" %5.2f", matrix[y][x]);
+            printf(" %5.4f", matrix[y][x]);
         }
         printf("\n");
     }
@@ -20,7 +21,7 @@ void usage(char *executable) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 5) {
+    if (argc < 5) {
         usage(argv[0]);
     }
 
@@ -32,6 +33,11 @@ int main(int argc, char **argv) {
 
     int filter_height = atoi(argv[3]);
     int filter_width = atoi(argv[4]);
+    
+    int no_write = 0;
+    if (argc > 5 && !strcmp(argv[5], "--no-write")) {
+        no_write = 1;
+    }
 
     int output_height = input_height - filter_height + 1;
     int output_width = input_width - filter_width + 1;
@@ -63,8 +69,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    print_matrix("input", input, input_height, input_width);
-    print_matrix("filter", filter, filter_height, filter_width);
+    if (!no_write) {
+        print_matrix("input", input, input_height, input_width);
+        print_matrix("filter", filter, filter_height, filter_width);
+    }
 
     for (int y = 0; y < output_height; y++) {
         for (int x = 0; x < output_width; x++) {
@@ -77,6 +85,8 @@ int main(int argc, char **argv) {
 
         }
     }
-
-    print_matrix("output", output, output_height, output_width);
+    
+    if (!no_write) {
+        print_matrix("output", output, output_height, output_width);
+    }
 }

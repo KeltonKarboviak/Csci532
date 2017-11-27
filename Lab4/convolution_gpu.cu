@@ -30,7 +30,7 @@ void print_matrix(const char *name, float *matrix, int height, int width) {
     printf("%s\n", name);
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
-            printf(" %5.2f", matrix[width * y + x]);
+            printf(" %5.4f", matrix[width * y + x]);
         }
         printf("\n");
     }
@@ -38,33 +38,32 @@ void print_matrix(const char *name, float *matrix, int height, int width) {
 }
 
 
-__global__
-static int POSITION(x, y, width) {
+__device__
+static int POSITION(int x, int y, int width) {
     return width * y + x;
 }
 
 
 __global__
-void gpu__convolute(float *input, float *filter, float *output, int output_size) {
+void gpu__convolute(float *input, float *filter, float *output) {
     // idx = (width) * (y) + (x)
     int y = blockDim.y * blockIdx.y + threadIdx.y;
     int x = blockDim.x * blockIdx.x + threadIdx.x;
-    int width = gridDim.x * blockDim.x
+    int width = d_output_width;
     int idx = POSITION(x, y, width);
 
-    if (idx < output_size) {
+    if (x < d_output_width && y < d_output_height) {
+        float result = 0.0;
+        
         for (int cy = 0; cy < d_filter_height; cy++) {
             for (int cx = 0; cx < d_filter_width; cx++) {
-                output[idx] = input[POSITION(x+cx, y+cy, d_input_width)] * filter[POSITION(cx, cy, d_filter_width)];
+                result += input[POSITION(x+cx, y+cy, d_input_width)] * filter[POSITION(cx, cy, d_filter_width)];
             }
         }
+        
+        output[idx] = result;
     }
 }
-
-
-// static int hPOSITION(x, y, width) {
-//     return width * y + x;
-// }
 
 
 void usage(char *executable) {
@@ -76,7 +75,7 @@ void usage(char *executable) {
 
 
 int main(int argc, char **argv) {
-    if (argc != 4) {
+    if (argc < 5) {
         usage(argv[0]);
     }
 
@@ -88,37 +87,37 @@ int main(int argc, char **argv) {
 
     int filter_height = atoi(argv[3]);
     int filter_width = atoi(argv[4]);
+    
+    int no_write = 0;
+    if (argc > 5 && !strcmp(argv[5], "--no-write")) {
+        no_write = 1;
+    }
 
     int output_height = input_height - filter_height + 1;
     int output_width = input_width - filter_width + 1;
 
     // Setup input array
     float *cpu__input = (float*) malloc(input_height * input_width * sizeof(float));
-    for (int y = 0; y < input_height; y++) {
-        for (int x = 0; x < input_width; x++) {
-            cpu__input[POSITION(x, y, input_width)] = drand48() * 100;
-        }
+    for (int i = 0; i < input_height * input_width; i++) {
+        cpu__input[i] = drand48() * 100;
     }
 
     // Setup filter array
     float *cpu__filter = (float*) malloc(filter_height * filter_width * sizeof(float));
-    for (int y = 0; y < filter_height; y++) {
-        for (int x = 0; x < filter_width; x++) {
-            cpu__filter[POSITION(x, y, filter_width)] = drand48() * 100;
-        }
+    for (int i = 0; i < filter_height * filter_width; i++) {
+        cpu__filter[i] = drand48() * 100;
     }
 
     // Setup output array
     float *cpu__output = (float*) malloc(output_height * output_width * sizeof(float));
-    for (int y = 0; y < output_height; y++) {
-        for (int x = 0; x < output_width; x++) {
-            cpu__output[POSITION(x, y, output_width)] = 0.0;
-        }
+    for (int i = 0; i < output_height * output_width; i++) {
+        cpu__output[i] = 0.0;
     }
 
-    print_matrix("input", input, input_height, input_width);
-    print_matrix("filter", filter, filter_height, filter_width);
-
+    if (!no_write) {
+        print_matrix("input", cpu__input, input_height, input_width);
+        print_matrix("filter", cpu__filter, filter_height, filter_width);
+    }
 
     cudaSetDevice(0);
 
@@ -137,7 +136,6 @@ int main(int argc, char **argv) {
         *gpu__filter,
         *gpu__output;
 
-
     // Allocate memory for arrays on GPU
     cudaErrorCheck( cudaMalloc((void**) &gpu__input,  input_height  * input_width  * sizeof(float)) );
     cudaErrorCheck( cudaMalloc((void**) &gpu__filter, filter_height * filter_width * sizeof(float)) );
@@ -148,26 +146,28 @@ int main(int argc, char **argv) {
     cudaErrorCheck( cudaMemcpy(gpu__filter, cpu__filter, filter_height * filter_width * sizeof(float), cudaMemcpyHostToDevice) );
     cudaErrorCheck( cudaMemcpy(gpu__output, cpu__output, output_height * output_width * sizeof(float), cudaMemcpyHostToDevice) );
 
-
-    int block_height = 32.0;
-    int block_width = 32.0;
+    float block_height = 16.0;
+    float block_width = 16.0;
 
     dim3 dimGrid(ceil(output_width / block_width), ceil(output_height / block_height), 1);
     dim3 dimBlock(block_width, block_height, 1);
 
-    convolute<<<dimGride, dimBlock>>>(gpu__input, gpu__filter, gpu__output, d_output_height * d_output_width);
+    gpu__convolute<<<dimGrid, dimBlock>>>(gpu__input, gpu__filter, gpu__output);
+    
+    cudaErrorCheck( cudaGetLastError() );
 
     // Copy memory for arrays from GPU -> CPU
     cudaErrorCheck( cudaMemcpy(cpu__output, gpu__output, output_height * output_width * sizeof(float), cudaMemcpyDeviceToHost) );
 
+    if (!no_write) {
+        print_matrix("output", cpu__output, output_height, output_width);
+    }
 
-    print_matrix("output", output, output_height, output_width);
+    free(cpu__input);  cpu__input  = NULL;
+    free(cpu__filter); cpu__filter = NULL;
+    free(cpu__output); cpu__output = NULL;
 
-    free(cpu__input);  cpu__input  = nullptr;
-    free(cpu__filter); cpu__filter = nullptr;
-    free(cpu__output); cpu__output = nullptr;
-
-    cudaFree(gpu__input);  gpu__input  = nullptr;
-    cudaFree(gpu__filter); gpu__filter = nullptr;
-    cudaFree(gpu__output); gpu__output = nullptr;
+    cudaFree(gpu__input);  gpu__input  = NULL;
+    cudaFree(gpu__filter); gpu__filter = NULL;
+    cudaFree(gpu__output); gpu__output = NULL;
 }
