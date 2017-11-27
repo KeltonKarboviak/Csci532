@@ -3,7 +3,6 @@
 import subprocess
 import itertools
 import time
-import pandas as pd
 
 
 def main():
@@ -15,28 +14,47 @@ def main():
         itertools.product(input_sizes, filter_sizes)
     )
 
-    df = pd.DataFrame(index=input_sizes, columns=filter_sizes)
-
     cmds = ['cpu', 'gpu']
 
-    cmd_str = './convolution_{0} {1} {1} {2} {2}'
+    base_cmd = './build/convolution_{}'
+    #cmd_str = './build/convolution_{0} {1} {1} {2} {2}'
 
-    for i, f in size_combinations:
+    results = {}
+    for idx, (i, f) in enumerate(size_combinations):
+        results[(i, f)] = {}
+        
         for c in cmds:
-            begin = time.time()
+            times = []
+            print "For %dx%d on %s:" % (i, f, c),
+            for _ in range(10):
+                cmd = [base_cmd.format(c)] + [str(i)]*2 + [str(f)]*2 + ['--no-write']
+            
+                begin = time.time()
+                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                out, err = p.communicate()
+                end = time.time()
+                
+                times.append(end - begin)
+                
+                print " %0.6f" % (end - begin),
+            
+            average = sum(times) / len(times)
+            
+            print "; avg =", average
+            
+            results[(i, f)][c] = average
 
-            p = subprocess.Popen(
-                cmd_str.format(c, i, f),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-
-            out, err = p.communicate()
-
-            end = time.time()
-
-            df.loc[i, f] = end - begin
-
+    print results
+    
+    for c in cmds:
+        print ',' + ','.join([str(x) for x in input_sizes])
+        for i in input_sizes: 
+            print "%d,%s" % (i, ','.join(["%0.6f" % results[(i, f)][c] for f in filter_sizes if (i, f) in results]))
+            """for f in filter_sizes:
+                d = results.get((i, f), {})
+                print ",%0.6f" % d.get(c, -1.0),
+            print """""
+        print ""
 
 if __name__ == '__main__':
     main()
