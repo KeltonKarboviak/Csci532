@@ -47,7 +47,7 @@ def main():
     print results
     
     for c in cmds:
-        print ',' + ','.join([str(x) for x in input_sizes])
+        print ',' + ','.join([str(x) for x in filter_sizes])
         for i in input_sizes: 
             print "%d,%s" % (i, ','.join(["%0.6f" % results[(i, f)][c] for f in filter_sizes if (i, f) in results]))
             """for f in filter_sizes:
