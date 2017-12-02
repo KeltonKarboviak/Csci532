@@ -1,5 +1,5 @@
-#include <cmath>
-using std::sqrt;
+#include <algorithm>
+using std::min;
 
 #include <chrono>
 
@@ -19,13 +19,9 @@ using std::string;
 #include <vector>
 using std::vector;
 
-#include <numeric>
-
 #ifdef __OPENCL__
 
 #include <cstdio>
-#include <cstring>
-#include <time.h>
 
 #ifdef __APPLE__
 #include <OpenCL/cl.h>
@@ -55,64 +51,6 @@ size_t *local_size;
 #define MATRIX_MUL_KERNEL_FILE "../matrix_mul_kernel.cl"
 
 
-//initialize the memory for a 3D array
-void initialize_3d(float ****v, uint32_t v_z, uint32_t v_y, uint32_t v_x) {
-    (*v) = (float***)malloc(sizeof(float**) * v_z);
-    for (uint32_t z = 0; z < v_z; z++) {
-        (*v)[z] = (float**)malloc(sizeof(float*) * v_y);
-        for (uint32_t y = 0; y < v_y; y++) {
-            (*v)[z][y] = (float*)malloc(sizeof(float) * v_x);
-        }
-    }
-}
-
-//set the values in a 3d array to random numbers
-void set_to_random_3d(float ***v, uint32_t v_z, uint32_t v_y, uint32_t v_x) {
-    for (uint32_t z = 0; z < v_z; z++) {
-        for (uint32_t y = 0; y < v_y; y++) {
-            for (uint32_t x = 0; x < v_x; x++) {
-                v[z][y][x] = drand48();
-            }
-        }
-    }
-}
-
-//set the values in a 3d array to 0
-void set_to_zero_3d(float ***v, uint32_t v_z, uint32_t v_y, uint32_t v_x) {
-    for (uint32_t z = 0; z < v_z; z++) {
-        for (uint32_t y = 0; y < v_y; y++) {
-            for (uint32_t x = 0; x < v_x; x++) {
-                v[z][y][x] = 0.0;
-            }
-        }
-    }
-}
-
-//copy the values from a 3d array to a flattened 1d array
-void copy_3d_to_1d(float ***input, uint32_t input_z, uint32_t input_y, uint32_t input_x, float *output) {
-    uint32_t current_output = 0;
-    for (uint32_t z = 0; z < input_z; z++) {
-        for (uint32_t y = 0; y < input_y; y++) {
-            for (uint32_t x = 0; x < input_x; x++) {
-                output[current_output++] = input[z][y][x];
-            }
-        }
-    }
-}
-
-//copy the values from a flattened 1d array to a 3d array
-void copy_1d_to_3d(float *input, uint32_t output_z, uint32_t output_y, uint32_t output_x, float ***output) {
-    uint32_t current_output = 0;
-    for (uint32_t z = 0; z < output_z; z++) {
-        for (uint32_t y = 0; y < output_y; y++) {
-            for (uint32_t x = 0; x < output_x; x++) {
-                output[z][y][x] = input[current_output++];
-            }
-        }
-    }
-}
-
-
 void print_1d(string name, float *input, int input_h, int input_w) {
     cout << "MATRIX '" << name << "'" << endl;
     for (int y = 0; y < input_h; y++) {
@@ -124,17 +62,18 @@ void print_1d(string name, float *input, int input_h, int input_w) {
 }
 
 
-void print_3d(string name, float ***input, uint32_t input_z, uint32_t input_y, uint32_t input_x) {
-    cout << "MATRIX '" << name << "'" << endl;
-    for (uint32_t z = 0; z < input_z; z++) {
-        for (uint32_t y = 0; y < input_y; y++) {
-            for (uint32_t x = 0; x < input_x; x++) {
-                cout << setw(10) << fixed << input[z][y][x];
-            }
-            cout << endl;
-        }
-        cout << endl;
+bool equal_1d(float *X, float *Y, int size) {
+    for (int i = 0; i < size; i++) {
+        if (X[i] != Y[i])
+            return false;
     }
+
+    return true;
+}
+
+
+int POSITION(int y, int x, int width) {
+    return width * y + x;
 }
 
 
@@ -149,32 +88,25 @@ void matrix_add(float ***A, float ***B, float ***C, int input_z, int input_y, in
 }
 
 
-void matrix_mul(float *A, float *B, float *C, int C_h, int C_w) {
-
-}
-
-
-bool equal_3d(float ***M1, float ***M2, int input_z, int input_y, int input_x) {
-    for (uint32_t z = 0; z < input_z; z++) {
-        for (uint32_t y = 0; y < input_y; y++) {
-            for (uint32_t x = 0; x < input_x; x++) {
-                if (M1[z][y][x] != M2[z][y][x]) return false;
+void matrix_mul(float *A, float *B, float *C, int C_h, int C_w, int A_w) {
+    float result;
+    for (int y = 0; y < C_h; y++) {
+        for (int x = 0; x < C_w; x++) {
+            result = 0.0;
+            for (int i = 0; i < A_w; i++) {
+                result += A[POSITION(y, i, A_w)] * B[POSITION(i, x, C_w)];
             }
+            C[POSITION(y, x, C_w)] = result;
         }
     }
-    return true;
 }
 
-void initialize_opencl(int A_size, int B_size, int C_size) {
-    //OpenCL structures
+
+void initialize_opencl(int A_size, int B_size, int C_size, int shared_side_length, int tile_width) {
+    // OpenCL structures
     cl_int err;
 
-    //Create device and context
-    device = create_device();
-
-    size_t maxWorkItemSizes[3];
-    clGetDeviceInfo(device, CL_DEVICE_MAX_WORK_ITEM_SIZES, sizeof(maxWorkItemSizes), &maxWorkItemSizes, NULL);
-
+    // Create context
     context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
     check_error(err, "couldn't create a context, err: %d", err);
 
@@ -182,11 +114,16 @@ void initialize_opencl(int A_size, int B_size, int C_size) {
     queue = clCreateCommandQueue(context, device, 0, &err);
     check_error(err, "couldn't create a command queue: %d", err);
 
+    // Create Vector of replacements for Kernel string
+    vector<string> replacements;
+    replacements.push_back("TILE_DEF");
+    replacements.push_back(std::to_string(tile_width));
+
     // Build program
-    matrix_mul_program = build_program(context, device, MATRIX_MUL_KERNEL_FILE);
+    matrix_mul_program = build_program(context, device, MATRIX_MUL_KERNEL_FILE, replacements);
 
     // Create a kernel
-    kernel = clCreateKernel(matrix_mul_program, "matrix_mul", &err);
+    kernel = clCreateKernel(matrix_mul_program, "matrix_mul_tiled", &err);
     check_error(err, "couldn't create a kernel: %d", err);
 
     //A_opencl, B_opencl, and C_opencl are set as global variables so we can reuse them
@@ -211,20 +148,18 @@ void initialize_opencl(int A_size, int B_size, int C_size) {
     err = clSetKernelArg(kernel, 2, sizeof(cl_mem), &C_opencl);
     check_error(err, "couldn't create C_opencl argument: %d", err);
 
-    global_size = (size_t*) malloc(sizeof(size_t) * 2);
-    local_size = (size_t*) malloc(sizeof(size_t) * 2);
+    err = clSetKernelArg(kernel, 3, sizeof(int), &shared_side_length);
+    check_error(err, "couldn't create width argument: %d", err);
 }
 
 
 void matrix_mul_opencl(float *A, float *B, float *C, int A_size, int B_size, int C_size) {
     cl_int err;
 
-    // int size = sizeof(float) * z * y * x;
-
-    err = clEnqueueWriteBuffer(queue, A_opencl, CL_TRUE, 0, A_size, A, 0, NULL, NULL);
+    err = clEnqueueWriteBuffer(queue, A_opencl, CL_TRUE, 0, sizeof(float) * A_size, A, 0, NULL, NULL);
     check_error(err, "couldn't write to the A_opencl buffer: %d", err);
 
-    err = clEnqueueWriteBuffer(queue, B_opencl, CL_TRUE, 0, B_size, B, 0, NULL, NULL);
+    err = clEnqueueWriteBuffer(queue, B_opencl, CL_TRUE, 0, sizeof(float) * B_size, B, 0, NULL, NULL);
     check_error(err, "couldn't write to the B_opencl buffer: %d", err);
 
     // Enqueue kernel
@@ -235,13 +170,17 @@ void matrix_mul_opencl(float *A, float *B, float *C, int A_size, int B_size, int
     check_error(err, "queue errored on finish: %d", err);
 
     // Read the kernel's output
-    err = clEnqueueReadBuffer(queue, C_opencl, CL_TRUE, 0, C_size, C, 0, NULL, NULL);
+    err = clEnqueueReadBuffer(queue, C_opencl, CL_TRUE, 0, sizeof(float) * C_size, C, 0, NULL, NULL);
     check_error(err, "couldn't read from the C_opencl buffer: %d", err);
 }
 
 
 void usage(char* executable) {
-    cerr << endl;
+    cerr << "ERROR, incorrect arguments." << endl
+         << "usage:" << endl
+         << "\t " << executable << " <A height: int> <A width: int> <B height: int> <B width: int>" << endl
+         << "Note: <A width> must equal <B height>"
+         << endl;
     exit(1);
 }
 
@@ -263,10 +202,14 @@ int main(int argc, char **argv) {
     int C_w = B_w;
     int C_size = C_h * C_w;
 
+    if (A_w != B_h) {
+        usage(argv[0]);
+    }
+
     float *A = (float*) malloc(sizeof(float) * A_size);
     float *B = (float*) malloc(sizeof(float) * B_size);
-    float *C = (float*) malloc(sizeof(float) * B_size);
-    // float *C_gpu;
+    float *C_cpu = (float*) malloc(sizeof(float) * C_size);
+    float *C_gpu = (float*) malloc(sizeof(float) * C_size);
 
     for (int i = 0; i < A_size; i++) {
         A[i] = i;  // drand48();
@@ -277,26 +220,68 @@ int main(int argc, char **argv) {
     }
 
     for (int i = 0; i < C_size; i++) {
-        C[i] = 0.0;
+        C_cpu[i] = 0.0;
+        C_gpu[i] = 0.0;
     }
 
     print_1d("A", A, A_h, A_w);
     print_1d("B", B, B_h, B_w);
 
-    cout << "created initial arrays." << endl;
+    cout << endl << "created initial arrays." << endl;
+
 
     cout << endl << "initializing opencl." << endl;
-    initialize_opencl(A_size, B_size, C_size);
-    cout << "initialized successfully." << endl;
 
+    // Create device
+    device = create_device();
+
+    size_t max_work_item_sizes[3];
+    size_t max_group_size;
+    cl_ulong local_memory_limit;
+
+    clGetDeviceInfo(device, CL_DEVICE_MAX_WORK_ITEM_SIZES, sizeof(max_work_item_sizes), &max_work_item_sizes, NULL);
+    clGetDeviceInfo(device, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(max_group_size), &max_group_size, NULL);
+    clGetDeviceInfo(device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(local_memory_limit), &local_memory_limit, NULL);
+
+    // Allocate arrays for holding Kernel dimensions
+    global_size = (size_t*) malloc(sizeof(size_t) * 2);
+    local_size = (size_t*) malloc(sizeof(size_t) * 2);
 
     // Create sizes for Kernel
-
     global_size[0] = C_h;  // y-dim
     global_size[1] = C_w;  // x-dim
 
-    // TODO: need to figure out the optimal size for the blocks
+    local_size[0] = 1;  // Block y-dim
+    local_size[1] = 1;  // Block x-dim
 
+    int i = 1;
+    int smaller = min(C_h, C_w);
+    int optimal = smaller / i++;
+
+    while (optimal != 1) {
+        if (C_h % optimal == 0 && C_w % optimal == 0
+            && optimal <= max_work_item_sizes[0] && optimal <= max_work_item_sizes[1]
+            && optimal * optimal * sizeof(float) <= local_memory_limit
+            && optimal * optimal <= max_group_size
+        ) {
+                break;
+        }
+
+        optimal = smaller / i++;
+    }
+
+    local_size[0] = local_size[1] = optimal;
+
+
+    printf("Max Work Item Sizes: (%lu, %lu)\n", max_work_item_sizes[0], max_work_item_sizes[1]);
+    printf("Local Memory Limit: %llu\n", local_memory_limit);
+    printf("Max Group Size: %lu\n", max_group_size);
+    printf("Global Size: (%lu, %lu)\n", global_size[0], global_size[1]);
+    printf("Local Size: (%lu, %lu)\n", local_size[0], local_size[1]);
+
+    initialize_opencl(A_size, B_size, C_size, A_w, local_size[0]);
+
+    cout << "initialized successfully." << endl;
 
 
     using namespace std::chrono;
@@ -305,25 +290,34 @@ int main(int argc, char **argv) {
     duration<float, std::milli> time_span;
 
     t1 = high_resolution_clock::now();
-    matrix_mul_opencl(A, B, C, A_size, B_size, C_size);
+    matrix_mul_opencl(A, B, C_gpu, A_size, B_size, C_size);
     t2 = high_resolution_clock::now();
 
     time_span = t2 - t1;
 
-    cout << "OpenCL Matrix Mul took: " << time_span.count() / 1000.0 << " seconds." << endl << endl;
+    cout << endl << "OpenCL Matrix Mul took: " << time_span.count() / 1000.0 << " seconds." << endl << endl;
 
-    // copy_1d_to_3d(C_flat, z, y, x, C_gpu);
-    // print_1d("C_GPU", C, C_h, C_w);
+    print_1d("C_GPU", C_gpu, C_h, C_w);
 
     t1 = high_resolution_clock::now();
-    matrix_mul(A, B, C, C_h, C_w);
+    matrix_mul(A, B, C_cpu, C_h, C_w, A_w);
     t2 = high_resolution_clock::now();
 
     time_span = t2 - t1;
 
-    cout << "CPU Matrix Mul took: " << time_span.count() / 1000.0 << " seconds." << endl << endl;
+    cout << endl << "CPU Matrix Mul took: " << time_span.count() / 1000.0 << " seconds." << endl << endl;
 
-    // cout << "Matrices equal? " << equal_3d(C_gpu, C, z, y, x) << endl;
+    print_1d("C_CPU", C_cpu, C_h, C_w);
+
+    cout << endl << "Matrices equal? " << std::boolalpha << equal_1d(C_gpu, C_cpu, C_size) << endl;
+
+    free(A);
+    free(B);
+    free(C_cpu);
+    free(C_gpu);
+
+    free(global_size);
+    free(local_size);
 
     clReleaseMemObject(A_opencl);
     clReleaseMemObject(B_opencl);

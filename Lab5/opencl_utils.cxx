@@ -4,12 +4,14 @@
 #include <CL/cl.h>
 #endif
 
-#include <math.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <stdlib.h>
-#include <string.h>
-#include <time.h>
+
+#include "opencl_utils.hxx"
+
+using std::ifstream;
+using std::vector;
+using std::string;
 
 void check_error(cl_int err, const char* fmt, ...) {
     va_list argp;
@@ -95,40 +97,54 @@ cl_device_id create_device() {
     return dev[0];
 }
 
-/* Create program from a file and compile it */
-cl_program build_program(cl_context ctx, cl_device_id dev, const char* filename) {
+string load_kernel_as_string(const char* filename) {
+    ifstream in(filename);
+    string program((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    return program;
+}
+
+void replace_all(string &str, const string original, const string replacement) {
+    string::size_type n = 0;
+
+    while ( (n = str.find(original, n)) != string::npos ) {
+        str.replace(n, original.size(), replacement);
+        n += replacement.size();
+    }
+}
+
+/**
+ * Create program from a file and compile it
+ */
+cl_program build_program(cl_context ctx, cl_device_id dev, const char* filename, vector<string> replacements) {
     cl_program program;
-    FILE *program_handle;
-    char *program_buffer, *program_log;
+    const char *program_buffer;
+    char *program_log;
     size_t program_size, log_size;
     int err;
 
-    /* Read program file and place content into buffer */
-    program_handle = fopen(filename, "r");
-    if (program_handle == NULL) {
-        fprintf(stderr, "Couldn't find the program file: '%s'\n", filename);
-        exit(1);
+    if (replacements.size() % 2 != 0) {
+        fprintf(stderr, "Odd number of Kernel replacements given!");
     }
 
-    fseek(program_handle, 0, SEEK_END);
-    program_size = ftell(program_handle);
-    rewind(program_handle);
-    program_buffer = (char*)malloc(program_size + 1);
-    program_buffer[program_size] = '\0';
-    fread(program_buffer, sizeof(char), program_size, program_handle);
-    fclose(program_handle);
+    string program_str = load_kernel_as_string(filename);
 
-    printf("program_buffer:\n\n%s\n\n", program_buffer);
+    // Go through replacements vector and make any programmatic changes to the program string
+    for (int i = 0; i < replacements.size(); i += 2) {
+        replace_all(program_str, replacements[i], replacements[i + 1]);
+    }
 
-    /* Create program from file */
-    program = clCreateProgramWithSource(ctx, 1, (const char**)&program_buffer, &program_size, &err);
+    program_buffer = program_str.data();
+    program_size = program_str.size();
+
+    // Create program from file
+    program = clCreateProgramWithSource(ctx, 1, &program_buffer, &program_size, &err);
     check_error(err, "Couldn't create the program: '%s'", filename);
-    free(program_buffer);
 
-    /* Build program */
+    // Build program
     err = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
     if(err < 0) {
-        /* Find size of log and print to std output */
+        // Find size of log and print to std output
         clGetProgramBuildInfo(program, dev, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
         program_log = (char*) malloc(log_size + 1);
         program_log[log_size] = '\0';
